@@ -36,6 +36,27 @@ export function textSample(element: Element): string {
   return (element.textContent ?? "").replace(/\s+/g, " ").trim().slice(0, 180);
 }
 
+export function isDataShapeCandidateTarget(element: Element): boolean {
+  if (
+    element.closest(
+      [
+        "input",
+        "textarea",
+        "select",
+        "option",
+        "button",
+        "[contenteditable='true']",
+        "[role='search']",
+        "form",
+      ].join(","),
+    )
+  ) {
+    return Boolean(element.closest("table tr, article, li, [role='row'], [role='listitem']"));
+  }
+
+  return true;
+}
+
 function cssEscape(value: string): string {
   return globalThis.CSS?.escape
     ? globalThis.CSS.escape(value)
@@ -247,6 +268,34 @@ function selectorMetaFromCandidates(candidates: SelectorCandidate[]): SelectorMe
     alternates: candidates.slice(1, 6).map((candidate) => candidate.selector),
     sample: best.sample,
   };
+}
+
+export function selectorMetaForElement(
+  element: Element,
+  scope: ParentNode = document,
+): { selector: string; selectorMeta: SelectorMeta } {
+  const candidates = generateSelectorCandidates(element, scope);
+  const best = candidates[0] ?? {
+    selector: structuralPath(element, scope instanceof Element ? scope : undefined),
+    strategy: "structural" as const,
+    confidence: 0.32,
+    sample: textSample(element),
+  };
+
+  return {
+    selector: best.selector,
+    selectorMeta: selectorMetaFromCandidates(candidates.length > 0 ? candidates : [best]),
+  };
+}
+
+export function isPaginationLikeElement(element: Element): boolean {
+  const label = textSample(element).toLowerCase();
+  const aria = (element.getAttribute("aria-label") ?? "").toLowerCase();
+  const title = (element.getAttribute("title") ?? "").toLowerCase();
+  const href = (element.getAttribute("href") ?? "").toLowerCase();
+  return /\b(next|more|load more|show more|older|›|»|>)\b/i.test(
+    `${label} ${aria} ${title} ${href}`,
+  );
 }
 
 function parentGroupSelector(item: Element): string {

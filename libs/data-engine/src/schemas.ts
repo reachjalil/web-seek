@@ -176,6 +176,14 @@ export const screenshotStepSchema = stepBaseSchema.extend({
   fullPage: z.boolean().default(true),
 });
 
+export const scrollStepSchema = stepBaseSchema.extend({
+  type: z.literal("scroll"),
+  x: z.number().default(0),
+  y: z.number().default(0),
+  behavior: z.enum(["auto", "smooth"]).default("auto"),
+  waitAfterMs: z.number().int().nonnegative().default(500),
+});
+
 export const extractTableStepSchema = stepBaseSchema.extend({
   type: z.literal("extract-table"),
   selector: z.string().min(1),
@@ -208,6 +216,7 @@ export const extractionStepSchema = z.discriminatedUnion("type", [
   selectStepSchema,
   humanCheckpointStepSchema,
   screenshotStepSchema,
+  scrollStepSchema,
   extractTableStepSchema,
   extractListStepSchema,
   downloadStepSchema,

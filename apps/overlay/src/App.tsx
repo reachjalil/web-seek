@@ -1,21 +1,47 @@
 import {
+  DndContext,
+  type DragEndEvent,
+  KeyboardSensor,
+  PointerSensor,
+  closestCenter,
+  useDraggable,
+  useSensor,
+  useSensors,
+} from "@dnd-kit/core";
+import {
+  SortableContext,
+  arrayMove,
+  sortableKeyboardCoordinates,
+  useSortable,
+  verticalListSortingStrategy,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
+import {
   BadgeCheck,
   Braces,
   Check,
   ChevronRight,
   CircleAlert,
+  Code2,
   Columns3,
+  Copy,
   Database,
+  Eye,
   FileJson,
   Gauge,
+  GripVertical,
+  Layers3,
   ListTree,
+  MoreHorizontal,
   MousePointer2,
+  PencilLine,
   Play,
   Radio,
   Route,
   Save,
   Settings2,
   Sparkles,
+  Square,
   Trash2,
   WandSparkles,
   X,
@@ -33,17 +59,24 @@ import {
   buildSuggestedFields,
   detectRepeatedItem,
   extractPreviewRows,
+  isDataShapeCandidateTarget,
+  isPaginationLikeElement,
   rectForElement,
   rectsForSelector,
+  selectorMetaForElement,
 } from "./dom-engine";
 import type { RepeatedItemResult } from "./dom-engine";
 import type {
+  DraftAction,
   DraftField,
   FieldTransform,
   OverlayDraft,
+  PaginationDraft,
   PickerMode,
   RecordingState,
   RectSnapshot,
+  SelectorMeta,
+  SelectorStrategy,
 } from "./types";
 
 const ATTRIBUTE_OPTIONS = ["text", "href", "src", "value", "html", "aria-label", "title"];
@@ -56,8 +89,23 @@ const TRANSFORM_OPTIONS: Array<{ value: FieldTransform | ""; label: string }> = 
   { value: "license-status", label: "license-status" },
   { value: "", label: "none" },
 ];
+const FIELD_TRANSFORMS = new Set<FieldTransform>(
+  TRANSFORM_OPTIONS.map((option) => option.value).filter((value): value is FieldTransform =>
+    Boolean(value),
+  ),
+);
+const SELECTOR_STRATEGIES = new Set<SelectorStrategy>([
+  "id",
+  "attribute",
+  "text-nearby",
+  "table-position",
+  "structural",
+  "nth-of-type",
+]);
+const ACTION_TYPES = new Set<DraftAction["type"]>(["click", "fill", "select", "scroll"]);
 
-type PanelTab = "shape" | "fields" | "preview" | "json" | "diagnostics";
+type PanelTab = "shape" | "actions" | "fields" | "preview" | "json" | "guide" | "diagnostics";
+type ToolPalette = "capture" | "record" | "output";
 
 interface AppProps {
   host: HTMLElement;
@@ -68,6 +116,34 @@ interface DataShapeSuggestion {
   fields: DraftField[];
   anchorRect: RectSnapshot;
 }
+
+interface ActionStats {
+  startedAt: number;
+  mutations: number;
+  network: number;
+  pointerMoves: number;
+}
+
+interface ActionSession extends ActionStats {
+  actions: DraftAction[];
+  startScrollX: number;
+  startScrollY: number;
+}
+
+interface PanelPosition {
+  x: number;
+  y: number;
+}
+
+interface PanelSize {
+  width: number;
+  height: number;
+}
+
+const PANEL_MIN_WIDTH = 390;
+const PANEL_MIN_HEIGHT = 360;
+const PANEL_MAX_WIDTH = 820;
+const PANEL_MARGIN = 12;
 
 function bridgeSend(
   type: "ready" | "draft-change" | "save-config" | "close-overlay" | "recording-status",
@@ -99,7 +175,301 @@ function modeLabel(mode: PickerMode): string {
   if (mode === "pagination") {
     return "Paging picker";
   }
+  if (mode === "action") {
+    return "Action recorder";
+  }
   return "Inspect";
+}
+
+function panelTabTitle(tab: PanelTab): string {
+  if (tab === "shape") {
+    return "Shape editor";
+  }
+  if (tab === "actions") {
+    return "Action flow";
+  }
+  if (tab === "fields") {
+    return "Field selectors";
+  }
+  if (tab === "preview") {
+    return "Data preview";
+  }
+  if (tab === "json") {
+    return "JSON editor";
+  }
+  if (tab === "guide") {
+    return "Agent guide";
+  }
+  return "Diagnostics";
+}
+
+function panelTabDescription(tab: PanelTab): string {
+  if (tab === "shape") {
+    return "Pick the repeated record and optional pagination control.";
+  }
+  if (tab === "actions") {
+    return "Recorded clicks, fills, selects, and scrolls before extraction.";
+  }
+  if (tab === "fields") {
+    return "Relative selectors and output attributes for each row.";
+  }
+  if (tab === "preview") {
+    return "Rows extracted from the current page with the draft selectors.";
+  }
+  if (tab === "json") {
+    return "Generated config preview plus editable draft JSON.";
+  }
+  if (tab === "guide") {
+    return "Plain-language workflow contract an agent can follow.";
+  }
+  return "Missing required pieces and save readiness.";
+}
+
+function actionLabel(action: DraftAction): string {
+  if (action.label) {
+    return action.label;
+  }
+  if (action.type === "scroll") {
+    return `Scroll to ${action.x ?? 0}, ${action.y ?? 0}`;
+  }
+  return `${action.type} ${action.selector ?? ""}`.trim();
+}
+
+function actionStepText(action: DraftAction): string {
+  if (action.type === "fill" || action.type === "select") {
+    return `${action.type} ${action.selector} = ${action.value ?? ""}`;
+  }
+  if (action.type === "scroll") {
+    return `scroll x:${action.x ?? 0} y:${action.y ?? 0}`;
+  }
+  return `${action.type} ${action.selector ?? ""}`;
+}
+
+function confidenceLabel(value: number | undefined): string {
+  return `${percent(value)}%`;
+}
+
+function buildAgentGuideMarkdown(
+  draft: OverlayDraft,
+  previewCount: number,
+  recording: RecordingState | undefined,
+  issues: ReturnType<typeof draftIssues>,
+): string {
+  const lines = [
+    `# Web Seek Agent Guide: ${draft.name}`,
+    "",
+    "Use this as the workflow contract for reproducing the browser task. Keep the run bounded, respect access controls, and pause for any CAPTCHA or human-only decision.",
+    "",
+    "## 1. Navigate",
+    `- Start URL: ${draft.startUrl}`,
+    `- Authoring URL: ${draft.sourceUrl}`,
+    `- Recorded setup actions: ${draft.actions.length}`,
+  ];
+
+  if (draft.actions.length > 0) {
+    draft.actions.forEach((action, index) => {
+      lines.push(`  ${index + 1}. ${actionStepText(action)}`);
+    });
+  } else {
+    lines.push("  - No setup actions recorded. Start from the source URL and capture directly.");
+  }
+
+  lines.push("", "## 2. Capture");
+  lines.push(`- Repeated record selector: ${draft.itemSelector ?? "not selected"}`);
+  lines.push(`- Extraction kind: ${draft.extractionKind}`);
+  if (draft.fields.length > 0) {
+    draft.fields.forEach((field, index) => {
+      lines.push(
+        `  ${index + 1}. ${field.name}: ${field.selector} -> ${field.attribute} (${confidenceLabel(field.selectorMeta?.confidence)})`,
+      );
+    });
+  } else {
+    lines.push("  - No fields selected yet.");
+  }
+
+  lines.push("", "## 3. Loop");
+  if (draft.pagination) {
+    lines.push(`- Next control selector: ${draft.pagination.nextSelector}`);
+    lines.push(`- Max pages: ${draft.pagination.maxPages}`);
+    lines.push(`- Wait after page change: ${draft.pagination.waitAfterMs}ms`);
+    lines.push(`- Stop when disabled: ${draft.pagination.stopWhenSelectorDisabled ? "yes" : "no"}`);
+  } else {
+    lines.push(
+      "- No pagination configured. Treat extraction as current-page only unless the operator records a loop.",
+    );
+  }
+
+  lines.push("", "## 4. Verify");
+  lines.push(`- Last preview row count: ${previewCount || draft.lastPreviewRowCount || 0}`);
+  lines.push(`- Selector confidence average: ${confidenceLabel(averageSelectorConfidence(draft))}`);
+  lines.push(
+    `- Recording: ${recording ? `${recording.id} (${recording.eventCount} events)` : "none"}`,
+  );
+  lines.push(`- Save readiness: ${issues.length === 0 ? "ready" : `${issues.length} issue(s)`}`);
+  for (const issue of issues) {
+    lines.push(`  - ${issue.severity.toUpperCase()}: ${issue.label}`);
+  }
+
+  lines.push("", "## Agent Notes");
+  lines.push(
+    "- Navigate first, then capture the repeated data shape, then fields, then configure loop/pagination only when needed.",
+  );
+  lines.push(
+    "- Use selectors as hypotheses; verify visible row counts against the page before a full run.",
+  );
+  lines.push("- Never bypass CAPTCHA, paywalls, authentication, rate limits, or terms screens.");
+
+  return lines.join("\n");
+}
+
+function textForAction(element: Element): string {
+  const label =
+    element.getAttribute("aria-label") ||
+    element.getAttribute("name") ||
+    element.getAttribute("title") ||
+    element.textContent ||
+    element.tagName.toLowerCase();
+  return label.replace(/\s+/g, " ").trim().slice(0, 80);
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function stringValue(value: unknown, fallback: string): string {
+  return typeof value === "string" && value.trim() ? value : fallback;
+}
+
+function optionalString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+function numberValue(value: unknown, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+}
+
+function booleanValue(value: unknown, fallback: boolean): boolean {
+  return typeof value === "boolean" ? value : fallback;
+}
+
+function stringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string")
+    : [];
+}
+
+function normalizeSelectorMeta(value: unknown): SelectorMeta | undefined {
+  const record = asRecord(value);
+  if (!record || !SELECTOR_STRATEGIES.has(record.strategy as SelectorStrategy)) {
+    return undefined;
+  }
+
+  return {
+    strategy: record.strategy as SelectorStrategy,
+    confidence: Math.max(0, Math.min(1, numberValue(record.confidence, 0))),
+    alternates: stringArray(record.alternates),
+    sample: optionalString(record.sample),
+  };
+}
+
+function normalizeDraftField(value: unknown, index: number): DraftField | undefined {
+  const record = asRecord(value);
+  const selector = optionalString(record?.selector);
+  if (!record || !selector) {
+    return undefined;
+  }
+
+  const transform =
+    typeof record.transform === "string" && FIELD_TRANSFORMS.has(record.transform as FieldTransform)
+      ? (record.transform as FieldTransform)
+      : undefined;
+
+  return {
+    id: stringValue(record.id, `field-${index + 1}`),
+    name: stringValue(record.name, `field_${index + 1}`),
+    selector,
+    attribute: stringValue(record.attribute, "text"),
+    required: booleanValue(record.required, false),
+    transform,
+    selectorMeta: normalizeSelectorMeta(record.selectorMeta),
+  };
+}
+
+function normalizeDraftAction(value: unknown, index: number): DraftAction | undefined {
+  const record = asRecord(value);
+  if (!record || !ACTION_TYPES.has(record.type as DraftAction["type"])) {
+    return undefined;
+  }
+
+  return {
+    id: stringValue(record.id, `action-${index + 1}`),
+    type: record.type as DraftAction["type"],
+    selector: optionalString(record.selector),
+    value: optionalString(record.value),
+    x: typeof record.x === "number" ? record.x : undefined,
+    y: typeof record.y === "number" ? record.y : undefined,
+    label: optionalString(record.label),
+    selectorMeta: normalizeSelectorMeta(record.selectorMeta),
+    observedMutations: numberValue(record.observedMutations, 0),
+    observedNetwork: numberValue(record.observedNetwork, 0),
+    pointerMoves: numberValue(record.pointerMoves, 0),
+    paginationHint: booleanValue(record.paginationHint, false),
+  };
+}
+
+function normalizePagination(value: unknown): PaginationDraft | undefined {
+  const record = asRecord(value);
+  const nextSelector = optionalString(record?.nextSelector);
+  if (!record || !nextSelector) {
+    return undefined;
+  }
+
+  return {
+    nextSelector,
+    maxPages: Math.max(1, Math.round(numberValue(record.maxPages, 25))),
+    waitAfterMs: Math.max(0, Math.round(numberValue(record.waitAfterMs, 750))),
+    stopWhenSelectorDisabled: booleanValue(record.stopWhenSelectorDisabled, true),
+    selectorMeta: normalizeSelectorMeta(record.selectorMeta),
+  };
+}
+
+function normalizeDraftFromJson(value: unknown, previous: OverlayDraft): OverlayDraft {
+  const record = asRecord(value);
+  if (!record) {
+    throw new Error("Draft JSON must be an object.");
+  }
+
+  const fields = Array.isArray(record.fields)
+    ? record.fields
+        .map((field, index) => normalizeDraftField(field, index))
+        .filter((field): field is DraftField => Boolean(field))
+    : previous.fields;
+  const actions = Array.isArray(record.actions)
+    ? record.actions
+        .map((action, index) => normalizeDraftAction(action, index))
+        .filter((action): action is DraftAction => Boolean(action))
+    : previous.actions;
+
+  return {
+    id: stringValue(record.id, previous.id),
+    name: stringValue(record.name, previous.name),
+    jurisdiction: optionalString(record.jurisdiction),
+    startUrl: stringValue(record.startUrl, previous.startUrl),
+    sourceUrl: stringValue(record.sourceUrl, previous.sourceUrl),
+    extractionKind: record.extractionKind === "table" ? "table" : "list",
+    itemSelector: optionalString(record.itemSelector),
+    itemSelectorMeta: normalizeSelectorMeta(record.itemSelectorMeta),
+    tableSelector: optionalString(record.tableSelector),
+    rowSelector: optionalString(record.rowSelector),
+    fields,
+    actions,
+    pagination: normalizePagination(record.pagination),
+    lastPreviewRowCount:
+      typeof record.lastPreviewRowCount === "number" ? record.lastPreviewRowCount : undefined,
+    notes: optionalString(record.notes),
+  };
 }
 
 function rowKey(row: Record<string, string>): string {
@@ -108,12 +478,59 @@ function rowKey(row: Record<string, string>): string {
     .join("|");
 }
 
+function clampNumber(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
+}
+
+function clampPanelSize(size: PanelSize): PanelSize {
+  return {
+    width: clampNumber(
+      size.width,
+      PANEL_MIN_WIDTH,
+      Math.min(PANEL_MAX_WIDTH, window.innerWidth - 24),
+    ),
+    height: clampNumber(size.height, PANEL_MIN_HEIGHT, window.innerHeight - 24),
+  };
+}
+
+function clampPanelPosition(position: PanelPosition, size: PanelSize): PanelPosition {
+  return {
+    x: clampNumber(
+      position.x,
+      PANEL_MARGIN,
+      Math.max(PANEL_MARGIN, window.innerWidth - size.width - PANEL_MARGIN),
+    ),
+    y: clampNumber(
+      position.y,
+      PANEL_MARGIN,
+      Math.max(PANEL_MARGIN, window.innerHeight - size.height - PANEL_MARGIN),
+    ),
+  };
+}
+
+function initialPanelSize(): PanelSize {
+  return clampPanelSize({
+    width: Math.min(500, window.innerWidth - 32),
+    height: Math.min(680, window.innerHeight - 32),
+  });
+}
+
+function initialPanelPosition(size: PanelSize): PanelPosition {
+  return clampPanelPosition(
+    {
+      x: window.innerWidth - size.width - 18,
+      y: 18,
+    },
+    size,
+  );
+}
+
 function toolbarClass(active: boolean): string {
   return [
-    "flex h-9 items-center gap-2 rounded-md border px-3 text-sm font-semibold transition",
+    "flex h-8 items-center gap-1.5 rounded-[4px] border px-2 text-xs font-semibold leading-none transition",
     active
-      ? "border-signal bg-signal text-white"
-      : "border-slate-200 bg-white text-ink hover:border-slate-400",
+      ? "border-teal-700 bg-teal-700 text-white shadow-sm"
+      : "border-slate-950/20 bg-white/95 text-slate-800 shadow-sm hover:border-slate-950/40 hover:bg-slate-50",
   ].join(" ");
 }
 
@@ -131,8 +548,396 @@ function IconButton({
   return (
     <button type="button" onClick={onClick} title={label} className={toolbarClass(Boolean(active))}>
       {children}
-      <span>{label}</span>
+      <span className="max-w-20 truncate">{label}</span>
     </button>
+  );
+}
+
+function DragHandle({
+  listeners,
+  attributes,
+}: {
+  listeners?: object;
+  attributes?: object;
+}) {
+  return (
+    <button
+      type="button"
+      title="Reorder"
+      className="mt-0.5 flex h-8 w-8 shrink-0 cursor-grab items-center justify-center rounded-md border border-slate-200 bg-slate-50 text-slate-500 active:cursor-grabbing"
+      {...(attributes ?? {})}
+      {...(listeners ?? {})}
+    >
+      <GripVertical size={15} />
+    </button>
+  );
+}
+
+function DetailPanelShell({
+  position,
+  size,
+  title,
+  status,
+  issueCount,
+  hasErrors,
+  recording,
+  quality,
+  children,
+  onClose,
+  onDiagnostics,
+  onResize,
+}: {
+  position: PanelPosition;
+  size: PanelSize;
+  title: string;
+  status: string;
+  issueCount: number;
+  hasErrors: boolean;
+  recording?: RecordingState;
+  quality: number;
+  children: React.ReactNode;
+  onClose: () => void;
+  onDiagnostics: () => void;
+  onResize: (size: PanelSize) => void;
+}) {
+  const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({
+    id: "detail-panel",
+  });
+  const translate = transform ? CSS.Translate.toString(transform) : undefined;
+
+  const startResize = (event: React.PointerEvent<HTMLButtonElement>): void => {
+    event.preventDefault();
+    event.stopPropagation();
+    const startX = event.clientX;
+    const startY = event.clientY;
+    const startSize = size;
+
+    const move = (moveEvent: PointerEvent): void => {
+      onResize(
+        clampPanelSize({
+          width: startSize.width + moveEvent.clientX - startX,
+          height: startSize.height + moveEvent.clientY - startY,
+        }),
+      );
+    };
+    const up = (): void => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+    };
+
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  };
+
+  return (
+    <aside
+      ref={setNodeRef}
+      className={[
+        "pointer-events-auto fixed flex flex-col overflow-hidden rounded-[4px] border border-slate-950/30 bg-[#f6f8fb] text-slate-900 shadow-[0_18px_60px_rgba(15,23,42,0.32)] ring-1 ring-white/60",
+        isDragging ? "opacity-95" : "",
+      ].join(" ")}
+      style={{
+        left: position.x,
+        top: position.y,
+        width: size.width,
+        height: size.height,
+        transform: translate,
+      }}
+    >
+      <div className="flex h-9 shrink-0 items-center gap-2 border-b border-slate-950/15 bg-slate-100 px-2">
+        <button
+          type="button"
+          title="Move panel"
+          className="flex h-6 w-6 cursor-grab items-center justify-center rounded-[3px] border border-slate-950/15 bg-white text-slate-600 active:cursor-grabbing"
+          {...attributes}
+          {...listeners}
+        >
+          <GripVertical size={14} />
+        </button>
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-xs font-bold">{title}</div>
+          <div className="truncate text-[10px] leading-3 text-slate-500">{status}</div>
+        </div>
+        <button
+          type="button"
+          onClick={onDiagnostics}
+          className={[
+            "flex h-6 items-center gap-1 rounded-[3px] border px-1.5 text-[11px] font-bold",
+            hasErrors
+              ? "border-red-300 bg-red-50 text-red-700"
+              : "border-teal-300 bg-teal-50 text-teal-700",
+          ].join(" ")}
+        >
+          {hasErrors ? <CircleAlert size={13} /> : <BadgeCheck size={13} />}
+          {issueCount}
+        </button>
+        <button
+          type="button"
+          title="Close panel"
+          onClick={onClose}
+          className="flex h-6 w-6 items-center justify-center rounded-[3px] border border-slate-950/15 bg-white text-slate-600 hover:bg-slate-200"
+        >
+          <X size={13} />
+        </button>
+      </div>
+
+      <div className="min-h-0 flex-1 overflow-hidden">{children}</div>
+
+      <div className="flex h-8 shrink-0 items-center justify-between border-t border-slate-950/15 bg-white px-2 text-[11px] text-slate-500">
+        <div className="flex min-w-0 items-center gap-2">
+          <Gauge size={13} />
+          <span>{percent(quality)}%</span>
+          {recording ? (
+            <>
+              <span className="h-1 w-1 rounded-full bg-slate-300" />
+              <span className="truncate">REC {recording.id}</span>
+            </>
+          ) : null}
+        </div>
+        <button
+          type="button"
+          title="Resize panel"
+          aria-label="Resize panel"
+          onPointerDown={startResize}
+          className="h-5 w-5 cursor-nwse-resize rounded-[3px] border border-slate-950/15 bg-slate-50 text-slate-500"
+        >
+          <span className="ml-auto mr-1 mt-1 block h-2 w-2 border-b border-r border-slate-500" />
+        </button>
+      </div>
+    </aside>
+  );
+}
+
+function DraggableDetailPanel({
+  position,
+  size,
+  title,
+  status,
+  issueCount,
+  hasErrors,
+  recording,
+  quality,
+  children,
+  onPositionChange,
+  onSizeChange,
+  onClose,
+  onDiagnostics,
+}: {
+  position: PanelPosition;
+  size: PanelSize;
+  title: string;
+  status: string;
+  issueCount: number;
+  hasErrors: boolean;
+  recording?: RecordingState;
+  quality: number;
+  children: React.ReactNode;
+  onPositionChange: (position: PanelPosition) => void;
+  onSizeChange: (size: PanelSize) => void;
+  onClose: () => void;
+  onDiagnostics: () => void;
+}) {
+  return (
+    <DndContext
+      onDragEnd={(event) => {
+        onPositionChange(
+          clampPanelPosition(
+            {
+              x: position.x + event.delta.x,
+              y: position.y + event.delta.y,
+            },
+            size,
+          ),
+        );
+      }}
+    >
+      <DetailPanelShell
+        position={position}
+        size={size}
+        title={title}
+        status={status}
+        issueCount={issueCount}
+        hasErrors={hasErrors}
+        recording={recording}
+        quality={quality}
+        onClose={onClose}
+        onDiagnostics={onDiagnostics}
+        onResize={(nextSize) => {
+          onSizeChange(nextSize);
+          onPositionChange(clampPanelPosition(position, nextSize));
+        }}
+      >
+        {children}
+      </DetailPanelShell>
+    </DndContext>
+  );
+}
+
+function ToolPalettePopover({
+  palette,
+  onClose,
+  onMode,
+  onTab,
+  onPreview,
+  onSave,
+  recording,
+  onStartRecording,
+  onStopRecording,
+}: {
+  palette?: ToolPalette;
+  onClose: () => void;
+  onMode: (mode: PickerMode) => void;
+  onTab: (tab: PanelTab) => void;
+  onPreview: () => void;
+  onSave: () => void;
+  recording: boolean;
+  onStartRecording: () => void;
+  onStopRecording: () => void;
+}) {
+  if (!palette) {
+    return null;
+  }
+
+  const itemClass =
+    "flex w-full items-center gap-2 rounded-[3px] px-2.5 py-2 text-left text-xs font-semibold text-slate-100 hover:bg-white/10";
+
+  return (
+    <div className="pointer-events-auto fixed left-4 top-12 w-64 overflow-hidden rounded-[4px] border border-slate-950/40 bg-slate-950 shadow-[0_18px_50px_rgba(2,6,23,0.45)] ring-1 ring-white/10">
+      <div className="flex items-center justify-between border-b border-white/10 bg-slate-900 px-2.5 py-2">
+        <div className="flex items-center gap-2 text-xs font-bold text-white">
+          <Layers3 size={15} />
+          <span>
+            {palette === "capture" ? "Capture" : palette === "record" ? "Record" : "Output"}
+          </span>
+        </div>
+        <button
+          type="button"
+          onClick={onClose}
+          className="rounded-[3px] p-1 text-slate-300 hover:bg-white/10 hover:text-white"
+        >
+          <X size={14} />
+        </button>
+      </div>
+
+      <div className="space-y-1 p-2">
+        {palette === "capture" ? (
+          <>
+            <button
+              type="button"
+              className={itemClass}
+              onClick={() => {
+                onMode("item");
+                onTab("shape");
+                onClose();
+              }}
+            >
+              <Sparkles size={16} />
+              Smart data shape
+            </button>
+            <button
+              type="button"
+              className={itemClass}
+              onClick={() => {
+                onMode("field");
+                onTab("fields");
+                onClose();
+              }}
+            >
+              <MousePointer2 size={16} />
+              Add field
+            </button>
+            <button
+              type="button"
+              className={itemClass}
+              onClick={() => {
+                onMode("pagination");
+                onTab("shape");
+                onClose();
+              }}
+            >
+              <ChevronRight size={16} />
+              Pick pagination
+            </button>
+          </>
+        ) : null}
+
+        {palette === "record" ? (
+          <>
+            <button
+              type="button"
+              className={itemClass}
+              onClick={() => {
+                recording ? onStopRecording() : onStartRecording();
+                onClose();
+              }}
+            >
+              {recording ? <Square size={16} /> : <Radio size={16} />}
+              {recording ? "Stop action recording" : "Start action recording"}
+            </button>
+            <button
+              type="button"
+              className={itemClass}
+              onClick={() => {
+                onTab("actions");
+                onClose();
+              }}
+            >
+              <Layers3 size={16} />
+              Open action layers
+            </button>
+          </>
+        ) : null}
+
+        {palette === "output" ? (
+          <>
+            <button
+              type="button"
+              className={itemClass}
+              onClick={() => {
+                onPreview();
+                onClose();
+              }}
+            >
+              <Play size={16} />
+              Run preview
+            </button>
+            <button
+              type="button"
+              className={itemClass}
+              onClick={() => {
+                onTab("json");
+                onClose();
+              }}
+            >
+              <FileJson size={16} />
+              Inspect JSON
+            </button>
+            <button
+              type="button"
+              className={itemClass}
+              onClick={() => {
+                onTab("guide");
+                onClose();
+              }}
+            >
+              <Route size={16} />
+              Agent guide
+            </button>
+            <button
+              type="button"
+              className={itemClass}
+              onClick={() => {
+                onSave();
+                onClose();
+              }}
+            >
+              <Save size={16} />
+              Save config
+            </button>
+          </>
+        ) : null}
+      </div>
+    </div>
   );
 }
 
@@ -291,6 +1096,16 @@ function WorkflowRail({
       },
     },
     {
+      id: "actions",
+      label: "Actions",
+      done: draft.actions.length > 0,
+      icon: <Radio size={16} />,
+      action: () => {
+        onTab("actions");
+        onMode("action");
+      },
+    },
+    {
       id: "preview",
       label: "Preview",
       done: previewCount > 0,
@@ -307,7 +1122,7 @@ function WorkflowRail({
   ];
 
   return (
-    <div className="grid grid-cols-4 gap-2">
+    <div className="grid grid-cols-5 gap-2">
       {steps.map((step) => (
         <button
           key={step.id}
@@ -331,6 +1146,455 @@ function WorkflowRail({
           <span className="truncate font-semibold">{step.label}</span>
         </button>
       ))}
+    </div>
+  );
+}
+
+interface TimelineLayerIntent {
+  id: string;
+  tab: PanelTab;
+  mode?: PickerMode;
+  selector?: string;
+  status: string;
+}
+
+function InspectorSection({
+  title,
+  subtitle,
+  count,
+  defaultOpen = true,
+  className,
+  bodyClassName,
+  children,
+}: {
+  title: string;
+  subtitle?: string;
+  count?: string | number;
+  defaultOpen?: boolean;
+  className?: string;
+  bodyClassName?: string;
+  children: React.ReactNode;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+
+  return (
+    <details
+      open={open}
+      onToggle={(event) => setOpen(event.currentTarget.open)}
+      className={[
+        "overflow-hidden rounded-[4px] border border-slate-950/15 bg-white",
+        className ?? "",
+      ].join(" ")}
+    >
+      <summary className="flex cursor-pointer list-none items-center gap-2 border-b border-slate-950/10 bg-slate-50 px-2.5 py-2">
+        <ChevronRight
+          size={13}
+          className={["shrink-0 text-slate-500 transition", open ? "rotate-90" : ""].join(" ")}
+        />
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-xs font-bold text-slate-900">{title}</span>
+          {subtitle ? (
+            <span className="block truncate text-[10px] leading-3 text-slate-500">{subtitle}</span>
+          ) : null}
+        </span>
+        {count !== undefined ? (
+          <span className="rounded-[3px] border border-slate-950/10 bg-white px-1.5 py-0.5 text-[10px] font-bold text-slate-500">
+            {count}
+          </span>
+        ) : null}
+      </summary>
+      <div className={["p-2", bodyClassName ?? ""].join(" ")}>{children}</div>
+    </details>
+  );
+}
+
+function LayerStatusBadge({
+  status,
+}: {
+  status: "ready" | "missing" | "output" | "optional";
+}) {
+  if (status === "ready") {
+    return (
+      <span
+        title="Ready: this layer is configured and will be included in the saved draft."
+        className="flex h-5 min-w-12 items-center justify-center gap-1 rounded-[3px] border border-teal-700/30 bg-teal-50 px-1.5 text-[10px] font-bold uppercase text-teal-800"
+      >
+        <Check size={11} />
+        ready
+      </span>
+    );
+  }
+
+  if (status === "missing") {
+    return (
+      <span
+        title="Missing: this layer needs input before the config is complete."
+        className="flex h-5 min-w-12 items-center justify-center gap-1 rounded-[3px] border border-amber-500/40 bg-amber-50 px-1.5 text-[10px] font-bold uppercase text-amber-800"
+      >
+        <CircleAlert size={11} />
+        todo
+      </span>
+    );
+  }
+
+  if (status === "optional") {
+    return (
+      <span
+        title="Optional: this phase is useful only when the site requires it."
+        className="flex h-5 min-w-12 items-center justify-center gap-1 rounded-[3px] border border-sky-500/30 bg-sky-50 px-1.5 text-[10px] font-bold uppercase text-sky-800"
+      >
+        <ChevronRight size={11} />
+        optional
+      </span>
+    );
+  }
+
+  return (
+    <span
+      title="Output: this layer previews or inspects the generated result."
+      className="flex h-5 min-w-12 items-center justify-center gap-1 rounded-[3px] border border-slate-950/10 bg-slate-100 px-1.5 text-[10px] font-bold uppercase text-slate-600"
+    >
+      <Eye size={11} />
+      view
+    </span>
+  );
+}
+
+function TimelineLayerItem({
+  id,
+  active,
+  status,
+  icon,
+  label,
+  meta,
+  intent,
+  onSelect,
+  children,
+}: {
+  id: string;
+  active: boolean;
+  status: "ready" | "missing" | "output" | "optional";
+  icon: React.ReactNode;
+  label: string;
+  meta: string;
+  intent: TimelineLayerIntent;
+  onSelect: (intent: TimelineLayerIntent) => void;
+  children?: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={() => onSelect(intent)}
+      className={[
+        "flex w-full items-center gap-2 rounded-[3px] border px-2 py-1.5 text-left transition",
+        active
+          ? "border-teal-700 bg-teal-50 ring-1 ring-teal-200"
+          : "border-transparent bg-white hover:border-slate-950/15 hover:bg-slate-50",
+      ].join(" ")}
+    >
+      <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-[3px] bg-slate-100 text-slate-600">
+        {icon}
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-xs font-bold text-slate-900">{label}</span>
+        <span className="block truncate text-[10px] leading-3 text-slate-500">{meta}</span>
+        {active && children ? (
+          <span className="mt-1 block truncate font-mono text-[10px] leading-3 text-slate-500">
+            {children}
+          </span>
+        ) : null}
+      </span>
+      <LayerStatusBadge status={status} />
+      <span className="w-10 shrink-0 text-right font-mono text-[10px] uppercase text-slate-400">
+        {id}
+      </span>
+    </button>
+  );
+}
+
+function TimelineGroup({
+  label,
+  count,
+  children,
+}: {
+  label: string;
+  count: number;
+  children: React.ReactNode;
+}) {
+  if (count === 0) {
+    return null;
+  }
+
+  return (
+    <div className="space-y-1">
+      <div className="flex items-center justify-between px-1 pt-1 text-[10px] font-bold uppercase tracking-wide text-slate-500">
+        <span>{label}</span>
+        <span>{count}</span>
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function DefinitionFlowCard({
+  step,
+  label,
+  description,
+  status,
+  active,
+  icon,
+  onClick,
+}: {
+  step: number;
+  label: string;
+  description: string;
+  status: "ready" | "missing" | "output" | "optional";
+  active: boolean;
+  icon: React.ReactNode;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={[
+        "flex min-w-0 items-start gap-2 rounded-[3px] border px-2 py-2 text-left",
+        active
+          ? "border-teal-700 bg-teal-50"
+          : "border-slate-950/10 bg-white hover:border-slate-950/30",
+      ].join(" ")}
+    >
+      <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-[3px] bg-slate-100 text-[11px] font-bold text-slate-700">
+        {step}
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="flex items-center gap-1.5 text-xs font-bold text-slate-900">
+          {icon}
+          <span className="truncate">{label}</span>
+        </span>
+        <span className="mt-0.5 block text-[10px] leading-3 text-slate-500">{description}</span>
+        <span className="mt-1 inline-flex">
+          <LayerStatusBadge status={status} />
+        </span>
+      </span>
+    </button>
+  );
+}
+
+function DefinitionFlow({
+  draft,
+  previewCount,
+  activeTab,
+  onSelect,
+}: {
+  draft: OverlayDraft;
+  previewCount: number;
+  activeTab: PanelTab;
+  onSelect: (tab: PanelTab, mode?: PickerMode, layer?: string) => void;
+}) {
+  const captureReady = Boolean(draft.itemSelector && draft.fields.length > 0);
+
+  return (
+    <div className="grid grid-cols-2 gap-2">
+      <DefinitionFlowCard
+        step={1}
+        label="Navigate"
+        description={`${draft.actions.length} recorded action${draft.actions.length === 1 ? "" : "s"} before extraction`}
+        status="ready"
+        active={activeTab === "actions"}
+        icon={<Route size={12} />}
+        onClick={() => onSelect("actions", "action", "actions")}
+      />
+      <DefinitionFlowCard
+        step={2}
+        label="Capture"
+        description={
+          captureReady
+            ? `${draft.fields.length} field${draft.fields.length === 1 ? "" : "s"} from repeated records`
+            : "Choose repeated records and fields"
+        }
+        status={captureReady ? "ready" : "missing"}
+        active={activeTab === "shape" || activeTab === "fields"}
+        icon={<MousePointer2 size={12} />}
+        onClick={() => onSelect(draft.itemSelector ? "fields" : "shape", "item", "shape")}
+      />
+      <DefinitionFlowCard
+        step={3}
+        label="Loop"
+        description={
+          draft.pagination
+            ? `${draft.pagination.maxPages} pages via next selector`
+            : "Optional pagination or load-more step"
+        }
+        status={draft.pagination ? "ready" : "optional"}
+        active={activeTab === "shape" && draft.pagination !== undefined}
+        icon={<ChevronRight size={12} />}
+        onClick={() => onSelect("shape", "pagination", "pagination")}
+      />
+      <DefinitionFlowCard
+        step={4}
+        label="Verify"
+        description={`${previewCount || draft.lastPreviewRowCount || 0} preview rows; export JSON or agent guide`}
+        status={previewCount > 0 || draftIsSavable(draft) ? "ready" : "output"}
+        active={activeTab === "preview" || activeTab === "json" || activeTab === "guide"}
+        icon={<Eye size={12} />}
+        onClick={() => onSelect("guide", undefined, "guide")}
+      />
+    </div>
+  );
+}
+
+function TimelineLayers({
+  draft,
+  previewCount,
+  recording,
+  activeLayer,
+  onSelect,
+}: {
+  draft: OverlayDraft;
+  previewCount: number;
+  recording?: RecordingState;
+  activeLayer: string;
+  onSelect: (intent: TimelineLayerIntent) => void;
+}) {
+  const shapeSelector = draft.itemSelector ?? draft.rowSelector ?? draft.tableSelector;
+
+  return (
+    <div className="space-y-2">
+      <div className="rounded-[3px] border border-slate-950/10 bg-slate-50 px-2 py-1.5 text-[10px] leading-4 text-slate-600">
+        <span className="font-bold text-slate-700">Status:</span> ready means saved in the draft;
+        todo means required setup is missing; optional is site-dependent; view is
+        preview/inspection.
+      </div>
+
+      <TimelineGroup label="Structure" count={1 + (draft.pagination ? 1 : 0)}>
+        <TimelineLayerItem
+          id="shape"
+          active={activeLayer === "shape"}
+          status={shapeSelector ? "ready" : "missing"}
+          icon={<ListTree size={14} />}
+          label="Repeated shape"
+          meta={shapeSelector ?? "No selector"}
+          intent={{
+            id: "shape",
+            tab: "shape",
+            mode: "item",
+            selector: shapeSelector,
+            status: shapeSelector ? "Focused repeated shape" : "Select repeated shape",
+          }}
+          onSelect={onSelect}
+        >
+          {shapeSelector ?? "No selector"}
+        </TimelineLayerItem>
+
+        {draft.pagination ? (
+          <TimelineLayerItem
+            id="page"
+            active={activeLayer === "pagination"}
+            status="ready"
+            icon={<ChevronRight size={14} />}
+            label="Pagination"
+            meta={`${draft.pagination.maxPages} pages / ${draft.pagination.waitAfterMs}ms wait`}
+            intent={{
+              id: "pagination",
+              tab: "shape",
+              mode: "pagination",
+              selector: draft.pagination.nextSelector,
+              status: "Focused pagination",
+            }}
+            onSelect={onSelect}
+          >
+            {draft.pagination.nextSelector}
+          </TimelineLayerItem>
+        ) : null}
+      </TimelineGroup>
+
+      <TimelineGroup label="Fields" count={draft.fields.length}>
+        {draft.fields.map((field, index) => {
+          const scopedSelector =
+            draft.itemSelector && !field.selector.startsWith(draft.itemSelector)
+              ? `${draft.itemSelector} ${field.selector}`
+              : field.selector;
+          return (
+            <TimelineLayerItem
+              key={field.id}
+              id={`F${index + 1}`}
+              active={activeLayer === field.id}
+              status={field.selector ? "ready" : "missing"}
+              icon={<Braces size={14} />}
+              label={field.name}
+              meta={`${field.attribute} ${percent(field.selectorMeta?.confidence)}%`}
+              intent={{
+                id: field.id,
+                tab: "fields",
+                mode: "field",
+                selector: scopedSelector,
+                status: `Focused field ${field.name}`,
+              }}
+              onSelect={onSelect}
+            >
+              {field.selectorMeta?.sample ?? field.selector}
+            </TimelineLayerItem>
+          );
+        })}
+      </TimelineGroup>
+
+      <TimelineGroup label="Recorded actions" count={draft.actions.length}>
+        {draft.actions.map((action, index) => (
+          <TimelineLayerItem
+            key={action.id}
+            id={`A${index + 1}`}
+            active={activeLayer === action.id}
+            status="ready"
+            icon={<Radio size={14} />}
+            label={actionLabel(action)}
+            meta={`${action.type} / ${action.observedMutations} DOM / ${action.observedNetwork} network`}
+            intent={{
+              id: action.id,
+              tab: "actions",
+              mode: "action",
+              selector: action.selector,
+              status: `Focused action ${index + 1}`,
+            }}
+            onSelect={onSelect}
+          >
+            {actionStepText(action)}
+          </TimelineLayerItem>
+        ))}
+      </TimelineGroup>
+
+      <TimelineGroup label="Outputs" count={3}>
+        <TimelineLayerItem
+          id="view"
+          active={activeLayer === "preview"}
+          status="output"
+          icon={<Eye size={14} />}
+          label="Preview"
+          meta={`${previewCount} rows`}
+          intent={{ id: "preview", tab: "preview", status: "Focused preview" }}
+          onSelect={onSelect}
+        />
+        <TimelineLayerItem
+          id="json"
+          active={activeLayer === "json"}
+          status={draftIsSavable(draft) ? "ready" : "missing"}
+          icon={<Code2 size={14} />}
+          label="JSON"
+          meta={recording ? `${recording.eventCount} recorded events` : "Generated config"}
+          intent={{ id: "json", tab: "json", status: "Focused JSON" }}
+          onSelect={onSelect}
+        />
+        <TimelineLayerItem
+          id="guide"
+          active={activeLayer === "guide"}
+          status="output"
+          icon={<Route size={14} />}
+          label="Agent guide"
+          meta="Navigate, capture, loop, verify"
+          intent={{ id: "guide", tab: "guide", status: "Focused agent guide" }}
+          onSelect={onSelect}
+        />
+      </TimelineGroup>
     </div>
   );
 }
@@ -412,16 +1676,19 @@ function FieldEditor({
   field,
   onChange,
   onRemove,
+  dragHandle,
 }: {
   field: DraftField;
   onChange: (field: DraftField) => void;
   onRemove: () => void;
+  dragHandle?: React.ReactNode;
 }) {
   const knownAttribute = ATTRIBUTE_OPTIONS.includes(field.attribute);
 
   return (
     <div className="rounded-md border border-slate-200 bg-white p-3">
       <div className="flex items-start gap-2">
+        {dragHandle}
         <input
           aria-label="Field name"
           value={field.name}
@@ -508,15 +1775,51 @@ function FieldEditor({
   );
 }
 
+function SortableFieldEditor({
+  field,
+  onChange,
+  onRemove,
+}: {
+  field: DraftField;
+  onChange: (field: DraftField) => void;
+  onRemove: () => void;
+}) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id: field.id,
+  });
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+  };
+
+  return (
+    <div ref={setNodeRef} style={style} className={isDragging ? "opacity-70" : undefined}>
+      <FieldEditor
+        field={field}
+        onChange={onChange}
+        onRemove={onRemove}
+        dragHandle={<DragHandle attributes={attributes} listeners={listeners} />}
+      />
+    </div>
+  );
+}
+
 function FieldsPanel({
   draft,
   onChange,
   onRemove,
+  onReorder,
 }: {
   draft: OverlayDraft;
   onChange: (field: DraftField) => void;
   onRemove: (id: string) => void;
+  onReorder: (event: DragEndEvent) => void;
 }) {
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  );
+
   return (
     <section>
       <div className="mb-2 flex items-center justify-between text-xs font-semibold uppercase tracking-wide text-slate-500">
@@ -529,16 +1832,183 @@ function FieldsPanel({
             No fields selected.
           </div>
         ) : null}
-        {draft.fields.map((field) => (
-          <FieldEditor
-            key={field.id}
-            field={field}
-            onChange={onChange}
-            onRemove={() => onRemove(field.id)}
-          />
-        ))}
+        <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onReorder}>
+          <SortableContext
+            items={draft.fields.map((field) => field.id)}
+            strategy={verticalListSortingStrategy}
+          >
+            {draft.fields.map((field) => (
+              <SortableFieldEditor
+                key={field.id}
+                field={field}
+                onChange={onChange}
+                onRemove={() => onRemove(field.id)}
+              />
+            ))}
+          </SortableContext>
+        </DndContext>
       </div>
     </section>
+  );
+}
+
+function ActionsPanel({
+  actions,
+  pendingActions,
+  recording,
+  stats,
+  onStart,
+  onStop,
+  onRemove,
+  onReorder,
+}: {
+  actions: DraftAction[];
+  pendingActions: DraftAction[];
+  recording: boolean;
+  stats: ActionStats | undefined;
+  onStart: () => void;
+  onStop: () => void;
+  onRemove: (id: string) => void;
+  onReorder: (event: DragEndEvent) => void;
+}) {
+  const visible = recording ? pendingActions : actions;
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  );
+
+  return (
+    <section className="space-y-3">
+      <div className="flex items-center justify-between">
+        <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+          Action flow
+        </div>
+        <button
+          type="button"
+          onClick={recording ? onStop : onStart}
+          className={[
+            "flex items-center gap-2 rounded-md border px-3 py-2 text-xs font-semibold",
+            recording
+              ? "border-red-200 bg-red-50 text-red-700 hover:border-red-300"
+              : "border-signal bg-signal text-white hover:bg-teal-700",
+          ].join(" ")}
+        >
+          {recording ? <Square size={14} /> : <Radio size={14} />}
+          {recording ? "Stop" : "Start"}
+        </button>
+      </div>
+
+      <div className="grid grid-cols-3 gap-2">
+        <Metric label="DOM" value={stats?.mutations ?? "-"} icon={<Database size={14} />} />
+        <Metric label="Network" value={stats?.network ?? "-"} icon={<Route size={14} />} />
+        <Metric
+          label="Moves"
+          value={stats?.pointerMoves ?? "-"}
+          icon={<MousePointer2 size={14} />}
+        />
+      </div>
+
+      <div className="space-y-2">
+        {visible.length === 0 ? (
+          <div className="rounded-md border border-slate-200 bg-white p-3 text-sm text-slate-500">
+            {recording
+              ? "Interact with the page, then stop to append actions."
+              : "No actions recorded."}
+          </div>
+        ) : null}
+        {recording ? (
+          visible.map((action) => <ActionCard key={action.id} action={action} recording />)
+        ) : (
+          <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onReorder}>
+            <SortableContext
+              items={actions.map((action) => action.id)}
+              strategy={verticalListSortingStrategy}
+            >
+              {actions.map((action) => (
+                <SortableActionCard
+                  key={action.id}
+                  action={action}
+                  onRemove={() => onRemove(action.id)}
+                />
+              ))}
+            </SortableContext>
+          </DndContext>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function ActionCard({
+  action,
+  recording,
+  onRemove,
+  dragHandle,
+}: {
+  action: DraftAction;
+  recording?: boolean;
+  onRemove?: () => void;
+  dragHandle?: React.ReactNode;
+}) {
+  return (
+    <div className="rounded-md border border-slate-200 bg-white p-3">
+      <div className="flex items-start justify-between gap-2">
+        <div className="flex min-w-0 flex-1 items-start gap-2">
+          {dragHandle}
+          <div className="min-w-0">
+            <div className="flex items-center gap-2 text-sm font-semibold text-ink">
+              <span className="rounded-md bg-slate-100 px-2 py-1 text-[11px] uppercase text-slate-600">
+                {action.type}
+              </span>
+              {action.paginationHint ? (
+                <span className="rounded-md bg-amber-100 px-2 py-1 text-[11px] text-amber-800">
+                  pagination
+                </span>
+              ) : null}
+              <span className="truncate text-xs text-slate-500">{actionLabel(action)}</span>
+            </div>
+            <div className="mt-2 break-all font-mono text-[11px] text-slate-700">
+              {actionStepText(action)}
+            </div>
+          </div>
+        </div>
+        {!recording && onRemove ? (
+          <button
+            type="button"
+            title="Remove action"
+            onClick={onRemove}
+            className="rounded-md border border-slate-200 p-1.5 text-slate-600 hover:border-red-300 hover:text-red-700"
+          >
+            <Trash2 size={15} />
+          </button>
+        ) : null}
+      </div>
+      <div className="mt-2 flex gap-2 text-[11px] text-slate-500">
+        <span>{action.observedMutations} DOM</span>
+        <span>{action.observedNetwork} network</span>
+        <span>{action.pointerMoves} moves</span>
+      </div>
+    </div>
+  );
+}
+
+function SortableActionCard({ action, onRemove }: { action: DraftAction; onRemove: () => void }) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id: action.id,
+  });
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+  };
+
+  return (
+    <div ref={setNodeRef} style={style} className={isDragging ? "opacity-70" : undefined}>
+      <ActionCard
+        action={action}
+        onRemove={onRemove}
+        dragHandle={<DragHandle attributes={attributes} listeners={listeners} />}
+      />
+    </div>
   );
 }
 
@@ -675,28 +2145,175 @@ function PaginationPanel({
 }
 
 function JsonPanel({
-  json,
-  onCopy,
+  generatedJson,
+  draftJson,
+  draftDirty,
+  draftError,
+  fieldCount,
+  actionCount,
+  onDraftJsonChange,
+  onApplyDraftJson,
+  onResetDraftJson,
+  onCopyGenerated,
+  onCopyDraft,
 }: {
-  json: string;
-  onCopy: () => void;
+  generatedJson: string;
+  draftJson: string;
+  draftDirty: boolean;
+  draftError?: string;
+  fieldCount: number;
+  actionCount: number;
+  onDraftJsonChange: (value: string) => void;
+  onApplyDraftJson: () => void;
+  onResetDraftJson: () => void;
+  onCopyGenerated: () => void;
+  onCopyDraft: () => void;
 }) {
+  const [view, setView] = useState<"preview" | "editor">("preview");
+  const generatedLineCount = generatedJson.split("\n").length;
+  const draftLineCount = draftJson.split("\n").length;
+
   return (
-    <section className="space-y-2">
+    <section className="space-y-3">
       <div className="flex items-center justify-between">
         <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">
           Generated JSON
         </div>
-        <button
-          type="button"
-          onClick={onCopy}
-          className="rounded-md border border-slate-200 bg-white px-2 py-1 text-xs font-semibold text-slate-700 hover:border-slate-400"
-        >
-          Copy
-        </button>
+        <div className="flex rounded-md border border-slate-200 bg-white p-1">
+          <button
+            type="button"
+            onClick={() => setView("preview")}
+            className={[
+              "flex items-center gap-1 rounded px-2 py-1 text-xs font-semibold",
+              view === "preview" ? "bg-ink text-white" : "text-slate-600 hover:bg-slate-100",
+            ].join(" ")}
+          >
+            <Eye size={13} />
+            Preview
+          </button>
+          <button
+            type="button"
+            onClick={() => setView("editor")}
+            className={[
+              "flex items-center gap-1 rounded px-2 py-1 text-xs font-semibold",
+              view === "editor" ? "bg-ink text-white" : "text-slate-600 hover:bg-slate-100",
+            ].join(" ")}
+          >
+            <PencilLine size={13} />
+            Editor
+          </button>
+        </div>
       </div>
-      <pre className="max-h-[420px] overflow-auto rounded-md border border-slate-200 bg-slate-950 p-3 text-[11px] leading-4 text-slate-100">
-        {json}
+
+      {view === "preview" ? (
+        <>
+          <div className="grid grid-cols-3 gap-2">
+            <Metric label="Lines" value={generatedLineCount} icon={<Code2 size={14} />} />
+            <Metric label="Fields" value={fieldCount} icon={<Braces size={14} />} />
+            <Metric label="Actions" value={actionCount} icon={<Radio size={14} />} />
+          </div>
+          <div className="flex justify-end">
+            <button
+              type="button"
+              onClick={onCopyGenerated}
+              className="flex items-center gap-2 rounded-md border border-slate-200 bg-white px-2 py-1 text-xs font-semibold text-slate-700 hover:border-slate-400"
+            >
+              <Copy size={13} />
+              Copy
+            </button>
+          </div>
+          <pre className="max-h-[520px] overflow-auto rounded-md border border-slate-200 bg-slate-950 p-3 text-[11px] leading-4 text-slate-100">
+            {generatedJson}
+          </pre>
+        </>
+      ) : null}
+
+      {view === "editor" ? (
+        <>
+          <div className="grid grid-cols-3 gap-2">
+            <Metric label="Draft lines" value={draftLineCount} icon={<PencilLine size={14} />} />
+            <Metric label="Fields" value={fieldCount} icon={<Braces size={14} />} />
+            <Metric label="Actions" value={actionCount} icon={<Radio size={14} />} />
+          </div>
+          <div className="flex items-center justify-between gap-2">
+            <div className="text-xs font-semibold text-slate-500">
+              {draftDirty ? "Unsaved draft edits" : "Draft synced"}
+            </div>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={onCopyDraft}
+                className="flex items-center gap-2 rounded-md border border-slate-200 bg-white px-2 py-1 text-xs font-semibold text-slate-700 hover:border-slate-400"
+              >
+                <Copy size={13} />
+                Copy
+              </button>
+              <button
+                type="button"
+                onClick={onResetDraftJson}
+                className="rounded-md border border-slate-200 bg-white px-2 py-1 text-xs font-semibold text-slate-700 hover:border-slate-400"
+              >
+                Reset
+              </button>
+              <button
+                type="button"
+                onClick={onApplyDraftJson}
+                className="rounded-md border border-signal bg-signal px-2 py-1 text-xs font-semibold text-white hover:bg-teal-700"
+              >
+                Apply
+              </button>
+            </div>
+          </div>
+          {draftError ? (
+            <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs font-semibold text-red-700">
+              {draftError}
+            </div>
+          ) : null}
+          <textarea
+            aria-label="Draft JSON editor"
+            value={draftJson}
+            spellCheck={false}
+            onChange={(event) => onDraftJsonChange(event.target.value)}
+            className="min-h-[520px] w-full resize-y rounded-md border border-slate-200 bg-slate-950 p-3 font-mono text-[11px] leading-4 text-slate-100 outline-none focus:border-signal"
+          />
+        </>
+      ) : null}
+    </section>
+  );
+}
+
+function AgentGuidePanel({
+  guide,
+  onCopy,
+}: {
+  guide: string;
+  onCopy: () => void;
+}) {
+  return (
+    <section className="space-y-3">
+      <div className="rounded-[4px] border border-slate-950/10 bg-white p-3">
+        <div className="flex items-start gap-2">
+          <Route size={16} className="mt-0.5 shrink-0 text-teal-700" />
+          <div className="min-w-0 flex-1">
+            <div className="text-sm font-bold text-slate-900">Agent handoff</div>
+            <p className="mt-1 text-xs leading-5 text-slate-600">
+              This is the compact contract for another agent or operator: where to go, what to do
+              before capture, which records and fields to extract, how to loop, and how to verify.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onCopy}
+            className="flex items-center gap-1.5 rounded-[3px] border border-slate-950/15 bg-white px-2 py-1 text-xs font-semibold text-slate-700 hover:border-slate-950/35"
+          >
+            <Copy size={13} />
+            Copy
+          </button>
+        </div>
+      </div>
+
+      <pre className="max-h-[520px] overflow-auto rounded-md border border-slate-200 bg-slate-950 p-3 text-[11px] leading-4 text-slate-100">
+        {guide}
       </pre>
     </section>
   );
@@ -733,28 +2350,44 @@ function DiagnosticsPanel({ draft }: { draft: OverlayDraft }) {
 
 export function App({ host }: AppProps) {
   const initialDraft = window.__WEB_SEEK_OVERLAY_INIT__?.draft;
-  const [draft, setDraft] = useState<OverlayDraft>(
-    initialDraft ?? {
-      id: "overlay-config",
-      name: "Overlay Config",
-      startUrl: location.href,
-      sourceUrl: location.href,
-      extractionKind: "list",
-      fields: [],
-    },
-  );
+  const startingDraft: OverlayDraft = initialDraft
+    ? { ...initialDraft, actions: initialDraft.actions ?? [] }
+    : {
+        id: "overlay-config",
+        name: "Overlay Config",
+        startUrl: location.href,
+        sourceUrl: location.href,
+        extractionKind: "list",
+        fields: [],
+        actions: [],
+      };
+  const [draft, setDraft] = useState<OverlayDraft>(startingDraft);
   const [mode, setMode] = useState<PickerMode>("idle");
   const [activeTab, setActiveTab] = useState<PanelTab>("shape");
+  const [activeLayer, setActiveLayer] = useState("shape");
+  const [detailOpen, setDetailOpen] = useState(true);
+  const [panelSize, setPanelSize] = useState<PanelSize>(() => initialPanelSize());
+  const [panelPosition, setPanelPosition] = useState<PanelPosition>(() =>
+    initialPanelPosition(initialPanelSize()),
+  );
+  const [openPalette, setOpenPalette] = useState<ToolPalette>();
   const [hoverRect, setHoverRect] = useState<RectSnapshot>();
   const [itemRects, setItemRects] = useState<RectSnapshot[]>([]);
   const [smartSuggestion, setSmartSuggestion] = useState<DataShapeSuggestion>();
   const [previewRows, setPreviewRows] = useState<Record<string, string>[]>([]);
+  const [actionRecording, setActionRecording] = useState(false);
+  const [pendingActions, setPendingActions] = useState<DraftAction[]>([]);
+  const [actionStats, setActionStats] = useState<ActionStats>();
   const [recording, setRecording] = useState<RecordingState | undefined>(
     window.__WEB_SEEK_OVERLAY_INIT__?.recording,
   );
   const [status, setStatus] = useState("Ready");
   const [saving, setSaving] = useState(false);
+  const [draftJson, setDraftJson] = useState(() => JSON.stringify(startingDraft, null, 2));
+  const [draftJsonDirty, setDraftJsonDirty] = useState(false);
+  const [draftJsonError, setDraftJsonError] = useState<string>();
   const readyDraftRef = useRef(draft);
+  const actionSessionRef = useRef<ActionSession | undefined>(undefined);
   const deferredPreviewRows = useDeferredValue(previewRows);
 
   const generatedConfig = useMemo(
@@ -763,7 +2396,30 @@ export function App({ host }: AppProps) {
   );
   const generatedJson = useDeferredValue(JSON.stringify(generatedConfig, null, 2));
   const issues = useMemo(() => draftIssues(draft), [draft]);
+  const agentGuide = useDeferredValue(
+    buildAgentGuideMarkdown(draft, previewRows.length, recording, issues),
+  );
   const quality = averageSelectorConfidence(draft);
+  const layerCount = 4 + draft.fields.length + draft.actions.length + (draft.pagination ? 1 : 0);
+
+  useEffect(() => {
+    if (!draftJsonDirty) {
+      setDraftJson(JSON.stringify(draft, null, 2));
+    }
+  }, [draft, draftJsonDirty]);
+
+  useEffect(() => {
+    const updatePanelBounds = (): void => {
+      setPanelSize((current) => {
+        const nextSize = clampPanelSize(current);
+        setPanelPosition((position) => clampPanelPosition(position, nextSize));
+        return nextSize;
+      });
+    };
+
+    window.addEventListener("resize", updatePanelBounds);
+    return () => window.removeEventListener("resize", updatePanelBounds);
+  }, []);
 
   useEffect(() => {
     void bridgeSend("ready", readyDraftRef.current);
@@ -813,6 +2469,205 @@ export function App({ host }: AppProps) {
     return () => window.clearTimeout(timeout);
   }, [draft]);
 
+  useEffect(() => {
+    if (!actionRecording) {
+      return;
+    }
+
+    const session: ActionSession = {
+      startedAt: Date.now(),
+      mutations: 0,
+      network: 0,
+      pointerMoves: 0,
+      actions: [],
+      startScrollX: window.scrollX,
+      startScrollY: window.scrollY,
+    };
+    actionSessionRef.current = session;
+    setPendingActions([]);
+    setActionStats(session);
+
+    const publish = () => {
+      setActionStats({ ...session });
+      setPendingActions([...session.actions]);
+    };
+
+    const addAction = (action: DraftAction): void => {
+      if (action.type === "fill" || action.type === "select") {
+        const index = session.actions.findIndex(
+          (item) => item.type === action.type && item.selector === action.selector,
+        );
+        if (index >= 0) {
+          session.actions[index] = action;
+          publish();
+          return;
+        }
+      }
+
+      session.actions.push(action);
+      publish();
+    };
+
+    const actionBase = (element: Element | undefined) => {
+      const selector = element ? selectorMetaForElement(element) : undefined;
+      return {
+        id: `action-${Date.now()}-${session.actions.length + 1}`,
+        selector: selector?.selector,
+        selectorMeta: selector?.selectorMeta,
+        observedMutations: session.mutations,
+        observedNetwork: session.network,
+        pointerMoves: session.pointerMoves,
+      };
+    };
+
+    const click = (event: MouseEvent): void => {
+      if (isOverlayEvent(event, host)) {
+        return;
+      }
+      const element = targetElement(event);
+      if (!element) {
+        return;
+      }
+      addAction({
+        ...actionBase(element),
+        type: "click",
+        label: `Click ${textForAction(element)}`,
+        paginationHint: isPaginationLikeElement(element),
+      });
+    };
+
+    const input = (event: Event): void => {
+      if (isOverlayEvent(event, host)) {
+        return;
+      }
+      const element = targetElement(event);
+      if (
+        !(element instanceof HTMLInputElement) &&
+        !(element instanceof HTMLTextAreaElement) &&
+        !(element instanceof HTMLSelectElement)
+      ) {
+        return;
+      }
+
+      addAction({
+        ...actionBase(element),
+        type: element instanceof HTMLSelectElement ? "select" : "fill",
+        value: element.value,
+        label: `${element instanceof HTMLSelectElement ? "Select" : "Fill"} ${textForAction(element)}`,
+        paginationHint: false,
+      });
+    };
+
+    const pointerMove = (): void => {
+      session.pointerMoves += 1;
+      if (session.pointerMoves % 20 === 0) {
+        publish();
+      }
+    };
+
+    const scroll = (): void => {
+      publish();
+    };
+
+    const mutationObserver = new MutationObserver((mutations) => {
+      session.mutations += mutations.length;
+      publish();
+    });
+    mutationObserver.observe(document.documentElement, {
+      subtree: true,
+      childList: true,
+      attributes: true,
+      characterData: true,
+    });
+
+    let performanceObserver: PerformanceObserver | undefined;
+    try {
+      performanceObserver = new PerformanceObserver((entries) => {
+        session.network += entries.getEntries().length;
+        publish();
+      });
+      performanceObserver.observe({ entryTypes: ["resource"] });
+    } catch {
+      performanceObserver = undefined;
+    }
+
+    document.addEventListener("click", click, true);
+    document.addEventListener("input", input, true);
+    document.addEventListener("change", input, true);
+    document.addEventListener("pointermove", pointerMove, true);
+    window.addEventListener("scroll", scroll, true);
+
+    return () => {
+      document.removeEventListener("click", click, true);
+      document.removeEventListener("input", input, true);
+      document.removeEventListener("change", input, true);
+      document.removeEventListener("pointermove", pointerMove, true);
+      window.removeEventListener("scroll", scroll, true);
+      mutationObserver.disconnect();
+      performanceObserver?.disconnect();
+    };
+  }, [actionRecording, host]);
+
+  const startActionRecording = useCallback(() => {
+    setMode("action");
+    setActiveTab("actions");
+    setActiveLayer("actions");
+    setDetailOpen(true);
+    setActionRecording(true);
+    setStatus("Recording browser actions");
+  }, []);
+
+  const stopActionRecording = useCallback(() => {
+    const session = actionSessionRef.current;
+    if (!session) {
+      setActionRecording(false);
+      return;
+    }
+
+    const actions = session.actions.map((action) => ({
+      ...action,
+      observedMutations: session.mutations,
+      observedNetwork: session.network,
+      pointerMoves: session.pointerMoves,
+    }));
+
+    if (window.scrollX !== session.startScrollX || window.scrollY !== session.startScrollY) {
+      actions.push({
+        id: `action-${Date.now()}-scroll`,
+        type: "scroll",
+        x: Math.round(window.scrollX),
+        y: Math.round(window.scrollY),
+        label: `Scroll to ${Math.round(window.scrollY)}`,
+        observedMutations: session.mutations,
+        observedNetwork: session.network,
+        pointerMoves: session.pointerMoves,
+      });
+    }
+
+    const paginationAction = [...actions].reverse().find((action) => action.paginationHint);
+    setDraft((current) => ({
+      ...current,
+      actions: [...current.actions, ...actions],
+      pagination:
+        !current.pagination && paginationAction?.selector
+          ? {
+              nextSelector: paginationAction.selector,
+              maxPages: 25,
+              waitAfterMs: 750,
+              stopWhenSelectorDisabled: true,
+              selectorMeta: paginationAction.selectorMeta,
+            }
+          : current.pagination,
+    }));
+    setPendingActions([]);
+    setActionStats({ ...session });
+    actionSessionRef.current = undefined;
+    setActionRecording(false);
+    setMode("idle");
+    setActiveLayer(actions.at(-1)?.id ?? "actions");
+    setStatus(`Added ${actions.length} actions`);
+  }, []);
+
   const acceptShape = useCallback(
     (result: RepeatedItemResult, fields: DraftField[]) => {
       const nextDraft = {
@@ -831,6 +2686,8 @@ export function App({ host }: AppProps) {
       setPreviewRows(extractPreviewRows(nextDraft));
       setStatus(`Accepted ${result.rects.length} items, ${fields.length} fields`);
       setActiveTab(fields.length > 0 ? "preview" : "fields");
+      setActiveLayer(fields.length > 0 ? "preview" : "shape");
+      setDetailOpen(true);
       setMode("idle");
       setHoverRect(undefined);
       setSmartSuggestion(undefined);
@@ -891,6 +2748,12 @@ export function App({ host }: AppProps) {
       }
 
       if (mode === "item") {
+        if (!isDataShapeCandidateTarget(element)) {
+          setSmartSuggestion(undefined);
+          setHoverRect(rectForElement(element));
+          setStatus("Use Actions for search inputs and form controls");
+          return;
+        }
         scheduleSmartSuggestion(element);
         return;
       }
@@ -909,11 +2772,20 @@ export function App({ host }: AppProps) {
         return;
       }
 
+      if (mode === "action") {
+        return;
+      }
+
       event.preventDefault();
       event.stopPropagation();
       event.stopImmediatePropagation();
 
       if (mode === "item") {
+        if (!isDataShapeCandidateTarget(element)) {
+          setStatus("Form controls are actions, not data shapes");
+          setMode("idle");
+          return;
+        }
         const result = detectRepeatedItem(element);
         acceptShape(result, buildSuggestedFields(result));
       }
@@ -942,6 +2814,8 @@ export function App({ host }: AppProps) {
 
           setStatus(`Added ${field.name}`);
           setActiveTab("fields");
+          setActiveLayer(field.id);
+          setDetailOpen(true);
           return {
             ...next,
             fields: [...next.fields, field],
@@ -959,6 +2833,8 @@ export function App({ host }: AppProps) {
         }));
         setStatus("Pagination selector captured");
         setActiveTab("shape");
+        setActiveLayer("pagination");
+        setDetailOpen(true);
       }
 
       setMode("idle");
@@ -997,6 +2873,38 @@ export function App({ host }: AppProps) {
     }));
   };
 
+  const reorderFields = (event: DragEndEvent) => {
+    const { active, over } = event;
+    if (!over || active.id === over.id) {
+      return;
+    }
+
+    setDraft((current) => {
+      const oldIndex = current.fields.findIndex((field) => field.id === active.id);
+      const newIndex = current.fields.findIndex((field) => field.id === over.id);
+      if (oldIndex < 0 || newIndex < 0) {
+        return current;
+      }
+      return { ...current, fields: arrayMove(current.fields, oldIndex, newIndex) };
+    });
+  };
+
+  const reorderActions = (event: DragEndEvent) => {
+    const { active, over } = event;
+    if (!over || active.id === over.id) {
+      return;
+    }
+
+    setDraft((current) => {
+      const oldIndex = current.actions.findIndex((action) => action.id === active.id);
+      const newIndex = current.actions.findIndex((action) => action.id === over.id);
+      if (oldIndex < 0 || newIndex < 0) {
+        return current;
+      }
+      return { ...current, actions: arrayMove(current.actions, oldIndex, newIndex) };
+    });
+  };
+
   const runPreview = () => {
     const rows = extractPreviewRows(draft);
     setPreviewRows(rows);
@@ -1007,16 +2915,77 @@ export function App({ host }: AppProps) {
     }));
     setStatus(`${rows.length} rows in preview`);
     setActiveTab("preview");
+    setActiveLayer("preview");
+    setDetailOpen(true);
   };
 
-  const copyJson = async () => {
+  const focusTimelineLayer = useCallback((intent: TimelineLayerIntent) => {
+    setActiveLayer(intent.id);
+    setActiveTab(intent.tab);
+    setDetailOpen(true);
+    if (intent.mode) {
+      setMode(intent.mode);
+    }
+
+    if (intent.selector) {
+      const [rect] = rectsForSelector(intent.selector);
+      setHoverRect(rect);
+    } else {
+      setHoverRect(undefined);
+    }
+
+    setStatus(intent.status);
+  }, []);
+
+  const updateDraftJson = (value: string) => {
+    setDraftJson(value);
+    setDraftJsonDirty(true);
+    setDraftJsonError(undefined);
+  };
+
+  const applyDraftJson = () => {
+    try {
+      const parsed = JSON.parse(draftJson) as unknown;
+      const nextDraft = normalizeDraftFromJson(parsed, draft);
+      setDraft(nextDraft);
+      setDraftJson(JSON.stringify(nextDraft, null, 2));
+      setDraftJsonDirty(false);
+      setDraftJsonError(undefined);
+      setStatus("Draft JSON applied");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Invalid draft JSON.";
+      setDraftJsonError(message);
+      setStatus("Draft JSON invalid");
+    }
+  };
+
+  const resetDraftJson = () => {
+    setDraftJson(JSON.stringify(draft, null, 2));
+    setDraftJsonDirty(false);
+    setDraftJsonError(undefined);
+    setStatus("Draft editor reset");
+  };
+
+  const copyGeneratedJson = async () => {
     await navigator.clipboard?.writeText(generatedJson);
     setStatus("JSON copied");
+  };
+
+  const copyDraftJson = async () => {
+    await navigator.clipboard?.writeText(draftJson);
+    setStatus("Draft JSON copied");
+  };
+
+  const copyAgentGuide = async () => {
+    await navigator.clipboard?.writeText(agentGuide);
+    setStatus("Agent guide copied");
   };
 
   const saveConfig = async () => {
     if (!draftIsSavable(draft)) {
       setActiveTab("diagnostics");
+      setActiveLayer("diagnostics");
+      setDetailOpen(true);
       setStatus("Resolve required items before saving");
       return;
     }
@@ -1049,19 +3018,64 @@ export function App({ host }: AppProps) {
         itemRects={itemRects}
         suggestionRects={mode === "item" ? (smartSuggestion?.result.rects ?? []) : []}
       />
-      <div className="pointer-events-none fixed inset-0 z-[2147483647] font-sans text-ink">
+      <div className="pointer-events-none fixed inset-0 z-[2147483647] select-none font-sans text-ink">
         <SuggestionPopover
           suggestion={mode === "item" ? smartSuggestion : undefined}
           onAccept={acceptSmartSuggestion}
         />
+        <ToolPalettePopover
+          palette={openPalette}
+          onClose={() => setOpenPalette(undefined)}
+          onMode={setMode}
+          onTab={(tab) => {
+            setActiveTab(tab);
+            setActiveLayer(tab);
+            setDetailOpen(true);
+          }}
+          onPreview={runPreview}
+          onSave={saveConfig}
+          recording={actionRecording}
+          onStartRecording={startActionRecording}
+          onStopRecording={stopActionRecording}
+        />
 
-        <div className="pointer-events-auto fixed left-4 top-4 flex items-center gap-2 rounded-md border border-slate-200 bg-panel p-2 shadow-overlay">
+        <div className="pointer-events-auto fixed left-4 top-4 flex items-center gap-1 rounded-[4px] border border-slate-950/30 bg-slate-100/95 p-1 shadow-[0_12px_38px_rgba(15,23,42,0.28)] ring-1 ring-white/70 backdrop-blur">
+          <IconButton
+            active={detailOpen}
+            label="Panel"
+            onClick={() => setDetailOpen((open) => !open)}
+          >
+            <Columns3 size={15} />
+          </IconButton>
+          <IconButton
+            active={openPalette === "capture"}
+            label="Capture"
+            onClick={() => setOpenPalette(openPalette === "capture" ? undefined : "capture")}
+          >
+            <MoreHorizontal size={16} />
+          </IconButton>
+          <IconButton
+            active={openPalette === "record"}
+            label="Record"
+            onClick={() => setOpenPalette(openPalette === "record" ? undefined : "record")}
+          >
+            <Radio size={16} />
+          </IconButton>
+          <IconButton
+            active={openPalette === "output"}
+            label="Output"
+            onClick={() => setOpenPalette(openPalette === "output" ? undefined : "output")}
+          >
+            <FileJson size={16} />
+          </IconButton>
           <IconButton
             active={mode === "item"}
             label="Shape"
             onClick={() => {
               setMode("item");
               setActiveTab("shape");
+              setActiveLayer("shape");
+              setDetailOpen(true);
             }}
           >
             <Sparkles size={16} />
@@ -1072,6 +3086,8 @@ export function App({ host }: AppProps) {
             onClick={() => {
               setMode("field");
               setActiveTab("fields");
+              setActiveLayer("fields");
+              setDetailOpen(true);
             }}
           >
             <MousePointer2 size={16} />
@@ -1082,9 +3098,18 @@ export function App({ host }: AppProps) {
             onClick={() => {
               setMode("pagination");
               setActiveTab("shape");
+              setActiveLayer("pagination");
+              setDetailOpen(true);
             }}
           >
             <ChevronRight size={16} />
+          </IconButton>
+          <IconButton
+            active={mode === "action"}
+            label={actionRecording ? "Stop" : "Actions"}
+            onClick={actionRecording ? stopActionRecording : startActionRecording}
+          >
+            {actionRecording ? <Square size={16} /> : <Radio size={16} />}
           </IconButton>
           <IconButton label="Preview" onClick={runPreview}>
             <Play size={16} />
@@ -1098,142 +3123,160 @@ export function App({ host }: AppProps) {
             onClick={() => {
               void Promise.resolve(bridgeSend("close-overlay", draft)).finally(() => host.remove());
             }}
-            className="flex h-9 w-9 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-600 hover:border-slate-400"
+            className="flex h-8 w-8 items-center justify-center rounded-[4px] border border-slate-950/20 bg-white/95 text-slate-600 shadow-sm hover:border-slate-950/40 hover:bg-slate-50"
           >
-            <X size={16} />
+            <X size={15} />
           </button>
         </div>
 
-        <aside className="pointer-events-auto fixed right-4 top-4 flex max-h-[calc(100vh-2rem)] w-[520px] flex-col overflow-hidden rounded-md border border-slate-200 bg-panel shadow-overlay">
-          <div className="border-b border-slate-200 bg-white px-4 py-3">
-            <div className="flex items-start justify-between gap-3">
-              <div className="min-w-0">
-                <div className="flex items-center gap-2 text-sm font-bold">
-                  <Columns3 size={16} />
-                  <span className="truncate">{draft.name}</span>
+        {detailOpen ? (
+          <DraggableDetailPanel
+            position={panelPosition}
+            size={panelSize}
+            title={draft.name}
+            status={`${modeLabel(mode)} / ${status}`}
+            issueCount={issues.length}
+            hasErrors={issues.some((issue) => issue.severity === "error")}
+            recording={recording}
+            quality={quality}
+            onPositionChange={setPanelPosition}
+            onSizeChange={setPanelSize}
+            onClose={() => setDetailOpen(false)}
+            onDiagnostics={() => {
+              setActiveTab("diagnostics");
+              setActiveLayer("diagnostics");
+            }}
+          >
+            <div className="flex h-full min-h-0 flex-col gap-2 bg-[#eef2f7] p-2">
+              <InspectorSection
+                title="Definition flow"
+                subtitle="Navigate, capture, loop, then verify for an agent handoff."
+                count="4"
+              >
+                <DefinitionFlow
+                  draft={draft}
+                  previewCount={deferredPreviewRows.length}
+                  activeTab={activeTab}
+                  onSelect={(tab, nextMode, layer) => {
+                    setActiveTab(tab);
+                    setActiveLayer(layer ?? tab);
+                    if (nextMode) {
+                      setMode(nextMode);
+                    }
+                  }}
+                />
+              </InspectorSection>
+
+              <InspectorSection
+                title="Layers"
+                subtitle="Ordered authoring stack; click a row to focus it."
+                count={layerCount}
+                defaultOpen={false}
+                bodyClassName="max-h-56 overflow-auto"
+              >
+                <TimelineLayers
+                  draft={draft}
+                  previewCount={deferredPreviewRows.length}
+                  recording={recording}
+                  activeLayer={activeLayer}
+                  onSelect={focusTimelineLayer}
+                />
+              </InspectorSection>
+
+              <InspectorSection
+                title={panelTabTitle(activeTab)}
+                subtitle={panelTabDescription(activeTab)}
+                className="flex min-h-0 flex-1 flex-col"
+                bodyClassName="min-h-0 flex-1 overflow-auto"
+              >
+                <div className="mb-2 flex gap-1 overflow-auto border-b border-slate-950/10 pb-2">
+                  {(
+                    [
+                      "shape",
+                      "actions",
+                      "fields",
+                      "preview",
+                      "json",
+                      "guide",
+                      "diagnostics",
+                    ] as PanelTab[]
+                  ).map((tab) => (
+                    <button
+                      key={tab}
+                      type="button"
+                      onClick={() => {
+                        setActiveTab(tab);
+                        setActiveLayer(tab);
+                      }}
+                      className={[
+                        "rounded-[3px] border px-2 py-1 text-[11px] font-semibold capitalize",
+                        activeTab === tab
+                          ? "border-slate-950 bg-slate-900 text-white"
+                          : "border-slate-950/15 bg-white text-slate-700 hover:border-slate-950/35",
+                      ].join(" ")}
+                    >
+                      {tab === "json" ? "JSON" : tab}
+                    </button>
+                  ))}
                 </div>
-                <div className="mt-1 flex items-center gap-2 text-xs text-slate-500">
-                  <Route size={13} />
-                  <span className="truncate">{modeLabel(mode)}</span>
-                  <span className="h-1 w-1 rounded-full bg-slate-300" />
-                  <span className="truncate">{status}</span>
+
+                <div className="space-y-3">
+                  {activeTab === "shape" ? (
+                    <>
+                      <ShapePanel draft={draft} />
+                      <PaginationPanel draft={draft} setDraft={setDraft} />
+                    </>
+                  ) : null}
+                  {activeTab === "actions" ? (
+                    <ActionsPanel
+                      actions={draft.actions}
+                      pendingActions={pendingActions}
+                      recording={actionRecording}
+                      stats={actionStats}
+                      onStart={startActionRecording}
+                      onStop={stopActionRecording}
+                      onRemove={(id) =>
+                        setDraft((current) => ({
+                          ...current,
+                          actions: current.actions.filter((action) => action.id !== id),
+                        }))
+                      }
+                      onReorder={reorderActions}
+                    />
+                  ) : null}
+                  {activeTab === "fields" ? (
+                    <FieldsPanel
+                      draft={draft}
+                      onChange={updateField}
+                      onRemove={removeField}
+                      onReorder={reorderFields}
+                    />
+                  ) : null}
+                  {activeTab === "preview" ? <PreviewTable rows={deferredPreviewRows} /> : null}
+                  {activeTab === "json" ? (
+                    <JsonPanel
+                      generatedJson={generatedJson}
+                      draftJson={draftJson}
+                      draftDirty={draftJsonDirty}
+                      draftError={draftJsonError}
+                      fieldCount={draft.fields.length}
+                      actionCount={draft.actions.length}
+                      onDraftJsonChange={updateDraftJson}
+                      onApplyDraftJson={applyDraftJson}
+                      onResetDraftJson={resetDraftJson}
+                      onCopyGenerated={copyGeneratedJson}
+                      onCopyDraft={copyDraftJson}
+                    />
+                  ) : null}
+                  {activeTab === "guide" ? (
+                    <AgentGuidePanel guide={agentGuide} onCopy={copyAgentGuide} />
+                  ) : null}
+                  {activeTab === "diagnostics" ? <DiagnosticsPanel draft={draft} /> : null}
                 </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => setActiveTab("diagnostics")}
-                className={[
-                  "flex h-8 items-center gap-1 rounded-md border px-2 text-xs font-semibold",
-                  issues.some((issue) => issue.severity === "error")
-                    ? "border-red-200 bg-red-50 text-red-700"
-                    : "border-teal-200 bg-teal-50 text-teal-700",
-                ].join(" ")}
-              >
-                {issues.some((issue) => issue.severity === "error") ? (
-                  <CircleAlert size={14} />
-                ) : (
-                  <BadgeCheck size={14} />
-                )}
-                {issues.length}
-              </button>
+              </InspectorSection>
             </div>
-
-            <div className="mt-3 grid grid-cols-4 gap-2">
-              <Metric
-                label="Records"
-                value={itemRects.length || "-"}
-                icon={<ListTree size={14} />}
-              />
-              <Metric label="Fields" value={draft.fields.length} icon={<Braces size={14} />} />
-              <Metric
-                label="Rows"
-                value={deferredPreviewRows.length}
-                icon={<Database size={14} />}
-              />
-              <Metric
-                label="Events"
-                value={recording?.eventCount ?? "-"}
-                icon={<Radio size={14} />}
-              />
-            </div>
-            <div className="mt-3">
-              <QualityMeter value={quality} />
-            </div>
-          </div>
-
-          <div className="border-b border-slate-200 bg-panel p-3">
-            <WorkflowRail
-              draft={draft}
-              previewCount={deferredPreviewRows.length}
-              activeTab={activeTab}
-              onTab={setActiveTab}
-              onMode={setMode}
-            />
-            <div className="mt-3 flex gap-2 overflow-auto">
-              {(["shape", "fields", "preview", "json", "diagnostics"] as PanelTab[]).map((tab) => (
-                <button
-                  key={tab}
-                  type="button"
-                  onClick={() => setActiveTab(tab)}
-                  className={[
-                    "rounded-md border px-3 py-1.5 text-xs font-semibold capitalize",
-                    activeTab === tab
-                      ? "border-ink bg-ink text-white"
-                      : "border-slate-200 bg-white text-slate-600 hover:border-slate-400",
-                  ].join(" ")}
-                >
-                  {tab === "json" ? "JSON" : tab}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div className="flex-1 space-y-4 overflow-auto p-4">
-            {activeTab === "shape" ? (
-              <>
-                <ShapePanel draft={draft} />
-                <PaginationPanel draft={draft} setDraft={setDraft} />
-              </>
-            ) : null}
-            {activeTab === "fields" ? (
-              <FieldsPanel draft={draft} onChange={updateField} onRemove={removeField} />
-            ) : null}
-            {activeTab === "preview" ? <PreviewTable rows={deferredPreviewRows} /> : null}
-            {activeTab === "json" ? <JsonPanel json={generatedJson} onCopy={copyJson} /> : null}
-            {activeTab === "diagnostics" ? <DiagnosticsPanel draft={draft} /> : null}
-          </div>
-
-          <div className="flex items-center justify-between border-t border-slate-200 bg-white px-4 py-3">
-            <div className="flex items-center gap-2 text-xs text-slate-500">
-              <Gauge size={14} />
-              <span>{percent(quality)}% selector average</span>
-              {recording ? (
-                <>
-                  <span className="h-1 w-1 rounded-full bg-slate-300" />
-                  <span>REC {recording.id}</span>
-                </>
-              ) : null}
-            </div>
-            <div className="flex gap-2">
-              <button
-                type="button"
-                onClick={() => setActiveTab("json")}
-                className="flex items-center gap-2 rounded-md border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:border-slate-400"
-              >
-                <Settings2 size={14} />
-                JSON
-              </button>
-              <button
-                type="button"
-                onClick={saveConfig}
-                className="flex items-center gap-2 rounded-md border border-signal bg-signal px-3 py-2 text-xs font-semibold text-white hover:bg-teal-700"
-              >
-                <Save size={14} />
-                {saving ? "Saving" : "Save"}
-              </button>
-            </div>
-          </div>
-        </aside>
+          </DraggableDetailPanel>
+        ) : null}
       </div>
     </>
   );

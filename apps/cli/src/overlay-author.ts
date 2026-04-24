@@ -20,7 +20,6 @@ import {
   type RecordingResult,
   startBrowserRecording,
 } from "./recorder";
-import { waitForEnter } from "./terminal";
 
 const DEFAULT_URL = "https://en.wikipedia.org/wiki/Special:Random";
 const BRIDGE_NAME = "webSeekOverlayBridge";
@@ -35,6 +34,42 @@ interface OverlayDraftField {
   selectorMeta?: SelectorMeta;
 }
 
+type OverlayDraftAction =
+  | {
+      id: string;
+      type: "click";
+      selector: string;
+      label?: string;
+      selectorMeta?: SelectorMeta;
+      observedMutations: number;
+      observedNetwork: number;
+      pointerMoves: number;
+      paginationHint?: boolean;
+    }
+  | {
+      id: string;
+      type: "fill" | "select";
+      selector: string;
+      value: string;
+      label?: string;
+      selectorMeta?: SelectorMeta;
+      observedMutations: number;
+      observedNetwork: number;
+      pointerMoves: number;
+      paginationHint?: boolean;
+    }
+  | {
+      id: string;
+      type: "scroll";
+      x: number;
+      y: number;
+      label?: string;
+      observedMutations: number;
+      observedNetwork: number;
+      pointerMoves: number;
+      paginationHint?: boolean;
+    };
+
 interface OverlayDraft {
   id: string;
   name: string;
@@ -46,6 +81,7 @@ interface OverlayDraft {
   tableSelector?: string;
   rowSelector?: string;
   fields: OverlayDraftField[];
+  actions: OverlayDraftAction[];
   pagination?: PaginationConfig & { selectorMeta?: SelectorMeta };
   lastPreviewRowCount?: number;
   notes?: string;
@@ -90,7 +126,7 @@ function validateUrl(value: string | undefined): string | undefined {
 }
 
 async function runOverlayBuild(overlayDirectory: string): Promise<void> {
-  const process = Bun.spawn(["bun", "run", "build"], {
+  const process = Bun.spawn(["bun", "--bun", "vite", "build"], {
     cwd: overlayDirectory,
     stdout: "pipe",
     stderr: "pipe",
@@ -170,6 +206,51 @@ function normalizePagination(
   };
 }
 
+function normalizeActionSteps(actions: OverlayDraftAction[]): ExtractionStep[] {
+  return actions.map((action, index) => {
+    const base = {
+      id: `action-${index + 1}-${action.type}`,
+      label: action.label,
+      optional: false,
+    };
+
+    switch (action.type) {
+      case "click":
+        return {
+          ...base,
+          type: "click",
+          selector: action.selector,
+          timeoutMs: 15_000,
+        };
+      case "fill":
+        return {
+          ...base,
+          type: "fill",
+          selector: action.selector,
+          value: action.value,
+          timeoutMs: 15_000,
+        };
+      case "select":
+        return {
+          ...base,
+          type: "select",
+          selector: action.selector,
+          value: action.value,
+          timeoutMs: 15_000,
+        };
+      case "scroll":
+        return {
+          ...base,
+          type: "scroll",
+          x: action.x,
+          y: action.y,
+          behavior: "auto",
+          waitAfterMs: 500,
+        };
+    }
+  });
+}
+
 function buildExtractionStep(draft: OverlayDraft): ExtractionStep {
   if (!draft.itemSelector) {
     throw new Error("Select a repeated item before saving.");
@@ -215,6 +296,7 @@ function buildConfigFromDraft(
   const now = new Date().toISOString();
   const sourceUrl = draft.sourceUrl || currentUrl;
   const extractionStep = buildExtractionStep(draft);
+  const actionSteps = normalizeActionSteps(draft.actions ?? []);
 
   return {
     schema: "web-seek.site-config.v1",
@@ -256,13 +338,7 @@ function buildConfigFromDraft(
         url: sourceUrl,
         waitUntil: "domcontentloaded",
       },
-      {
-        id: "human-review",
-        type: "human-checkpoint",
-        label: "Human review",
-        optional: false,
-        reason: "Review the page, solve CAPTCHA if present, and confirm the data page is ready.",
-      },
+      ...actionSteps,
       extractionStep,
     ],
     output: {
@@ -455,10 +531,6 @@ export async function authorSiteConfigWithOverlay(): Promise<string> {
     const userAgent = await page.evaluate(() => navigator.userAgent).catch(() => undefined);
     const viewport = page.viewportSize() ?? undefined;
 
-    await waitForEnter(
-      "Navigate, search, or solve any challenge until the browser shows the data page. Press Enter here to inject the overlay.",
-    );
-
     const draft: OverlayDraft = {
       id: safeSlug(id),
       name,
@@ -467,10 +539,11 @@ export async function authorSiteConfigWithOverlay(): Promise<string> {
       sourceUrl: page.url(),
       extractionKind: "list",
       fields: [],
+      actions: [],
     };
 
     note(
-      "Recording is active. Use the overlay toolbar in Chrome to select an item, fields, optional pagination, preview, then save.",
+      "Recording is active. Use the floating overlay toolbar in Chrome to record actions, select data, preview, then save.",
       "Overlay ready",
     );
     return await injectOverlay(page, assets, draft, recording, { userAgent, viewport });

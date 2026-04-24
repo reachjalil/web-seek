@@ -21,3 +21,10 @@ select,
 textarea {
   font: inherit;
 }
+
+input,
+select,
+textarea,
+pre {
+  user-select: text;
+}

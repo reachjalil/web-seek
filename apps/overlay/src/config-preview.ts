@@ -1,4 +1,10 @@
-import type { DraftField, OverlayDraft, PaginationDraft, RecordingState } from "./types";
+import type {
+  DraftAction,
+  DraftField,
+  OverlayDraft,
+  PaginationDraft,
+  RecordingState,
+} from "./types";
 
 export interface DraftIssue {
   id: string;
@@ -49,6 +55,52 @@ function normalizePagination(pagination: PaginationDraft | undefined) {
   };
 }
 
+function normalizeActionSteps(actions: DraftAction[]) {
+  return actions
+    .map((action, index) => {
+      const base = {
+        id: `action-${index + 1}-${action.type}`,
+        label: action.label,
+        optional: false,
+      };
+
+      if (action.type === "click" && action.selector) {
+        return { ...base, type: "click", selector: action.selector, timeoutMs: 15_000 };
+      }
+      if (action.type === "fill" && action.selector) {
+        return {
+          ...base,
+          type: "fill",
+          selector: action.selector,
+          value: action.value ?? "",
+          timeoutMs: 15_000,
+        };
+      }
+      if (action.type === "select" && action.selector) {
+        return {
+          ...base,
+          type: "select",
+          selector: action.selector,
+          value: action.value ?? "",
+          timeoutMs: 15_000,
+        };
+      }
+      if (action.type === "scroll") {
+        return {
+          ...base,
+          type: "scroll",
+          x: action.x ?? 0,
+          y: action.y ?? 0,
+          behavior: "auto",
+          waitAfterMs: 500,
+        };
+      }
+
+      return undefined;
+    })
+    .filter(Boolean);
+}
+
 export function draftIssues(draft: OverlayDraft): DraftIssue[] {
   const issues: DraftIssue[] = [];
 
@@ -57,6 +109,13 @@ export function draftIssues(draft: OverlayDraft): DraftIssue[] {
   }
   if (draft.fields.length === 0) {
     issues.push({ id: "fields", label: "No fields selected", severity: "error" });
+  }
+  if (draft.actions.some((action) => action.type !== "scroll" && !action.selector)) {
+    issues.push({
+      id: "action-selector",
+      label: "An action is missing a selector",
+      severity: "error",
+    });
   }
   if (draft.fields.some((field) => !field.name.trim())) {
     issues.push({ id: "field-name", label: "A field is missing a name", severity: "error" });
@@ -160,13 +219,7 @@ export function buildGeneratedConfigPreview(
         url: sourceUrl,
         waitUntil: "domcontentloaded",
       },
-      {
-        id: "human-review",
-        type: "human-checkpoint",
-        label: "Human review",
-        optional: false,
-        reason: "Review the page, solve CAPTCHA if present, and confirm the data page is ready.",
-      },
+      ...normalizeActionSteps(draft.actions),
       extractionStep,
     ],
     output: {

@@ -105,6 +105,25 @@ filesystem writes and validation; the overlay only sends draft state through a P
 The same browser context also starts an rrweb authoring recording, so the overlay can show live event
 counts and the saved config can point back to the recording that produced it.
 
+The overlay is organized like a compact editor: the floating toolbar opens Capture, Record, and
+Output popover palettes, while the side panel keeps shape, action, field, preview, JSON, and
+diagnostic views separated. Fields and recorded actions use DnD Kit drag handles so authors can
+reorder the generated extraction shape and recorded action flow before saving the config.
+An expandable layers timeline keeps the selected repeated shape, fields, recorded actions,
+pagination, preview, and generated JSON in one ordered authoring stack. The JSON panel includes both
+a generated config preview and a draft editor so advanced selector changes can be applied before the
+CLI validates and writes the final config.
+The detail panel can be closed from its header, reopened from the toolbar, dragged with its header
+handle, and resized from the lower-right grip so it can stay out of the target page's way.
+Panel content is split into reusable collapsible inspector sections. The layers section groups
+structure, fields, recorded actions, and outputs, with explicit ready/todo/view status badges so the
+green check state is clear instead of looking like a checkbox.
+
+Use the Actions mode in the floating toolbar to record a bounded interaction flow directly on the
+site. The overlay captures clicks, fills, selects, scroll position, pointer movement counts, and
+DOM/network activity during the segment. Stopping the segment appends those actions to the draft; a
+next/load-more click is also suggested as pagination.
+
 In item selection mode, the overlay also preselects likely data shapes as the mouse moves. It
 highlights the suggested repeated records, scores the selector, generates starter fields, and shows a
 floating acceptance panel to accept the suggestion before saving or editing the draft.

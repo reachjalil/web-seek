@@ -354,6 +354,15 @@ async function executeStep(
     case "screenshot":
       result.screenshots.push(await saveScreenshot(page, config, step.name, step.fullPage));
       break;
+    case "scroll":
+      await page.evaluate(
+        ({ x, y, behavior }) => {
+          window.scrollTo({ left: x, top: y, behavior });
+        },
+        { x: step.x, y: step.y, behavior: step.behavior },
+      );
+      await page.waitForTimeout(step.waitAfterMs);
+      break;
     case "download":
       result.downloads.push(await runDownload(page, config, step));
       break;

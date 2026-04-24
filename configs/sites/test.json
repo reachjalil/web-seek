@@ -5,10 +5,7 @@
   "jurisdiction": "co",
   "startUrl": "https://www.npmjs.com/",
   "description": "Authored from an interactive browser session. Edit selectors and input variables as the site changes.",
-  "tags": [
-    "interactive",
-    "government-data"
-  ],
+  "tags": ["interactive", "government-data"],
   "createdAt": "2026-04-24T04:13:43.028Z",
   "updatedAt": "2026-04-24T04:13:43.028Z",
   "browser": {

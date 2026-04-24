@@ -1,4 +1,4 @@
-export type PickerMode = "idle" | "item" | "field" | "pagination";
+export type PickerMode = "idle" | "item" | "field" | "pagination" | "action";
 
 export type SelectorStrategy =
   | "id"
@@ -41,6 +41,23 @@ export interface PaginationDraft {
   selectorMeta?: SelectorMeta;
 }
 
+export type DraftActionKind = "click" | "fill" | "select" | "scroll";
+
+export interface DraftAction {
+  id: string;
+  type: DraftActionKind;
+  selector?: string;
+  value?: string;
+  x?: number;
+  y?: number;
+  label?: string;
+  selectorMeta?: SelectorMeta;
+  observedMutations: number;
+  observedNetwork: number;
+  pointerMoves: number;
+  paginationHint?: boolean;
+}
+
 export interface OverlayDraft {
   id: string;
   name: string;
@@ -53,6 +70,7 @@ export interface OverlayDraft {
   tableSelector?: string;
   rowSelector?: string;
   fields: DraftField[];
+  actions: DraftAction[];
   pagination?: PaginationDraft;
   lastPreviewRowCount?: number;
   notes?: string;
