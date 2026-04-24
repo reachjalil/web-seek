@@ -1,5 +1,5 @@
-import chalk from "chalk";
 import boxen from "boxen";
+import chalk from "chalk";
 import logSymbols from "log-symbols";
 
 export function formatTitle(text: string): string {

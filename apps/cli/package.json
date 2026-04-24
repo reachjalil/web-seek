@@ -2,15 +2,22 @@
   "name": "@web-seek/cli",
   "version": "0.0.0",
   "private": true,
+  "bin": {
+    "web-seek": "index.ts"
+  },
   "scripts": {
-    "dev": "bun run index.ts"
+    "dev": "bun run index.ts",
+    "start": "bun run index.ts"
   },
   "dependencies": {
     "@web-seek/data-engine": "workspace:*",
     "@web-seek/cli-utils": "workspace:*",
-    "@clack/prompts": "^0.7.0",
+    "@clack/prompts": "^1.2.0",
     "ora": "^8.1.0",
-    "cli-table3": "^0.6.5"
+    "cli-table3": "^0.6.5",
+    "playwright": "^1.59.1",
+    "rrweb": "^2.0.0-alpha.4",
+    "rrweb-player": "^1.0.0-alpha.4"
   },
   "devDependencies": {}
 }

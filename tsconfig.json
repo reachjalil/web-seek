@@ -2,13 +2,16 @@
   "compilerOptions": {
     "target": "esnext",
     "module": "esnext",
+    "lib": ["ESNext", "DOM", "DOM.Iterable"],
     "moduleResolution": "bundler",
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true,
-    "isolatedModules": true
+    "isolatedModules": true,
+    "noEmit": true,
+    "types": ["bun", "node"]
   },
   "exclude": ["node_modules", "dist"]
 }

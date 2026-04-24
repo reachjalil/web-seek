@@ -5,13 +5,17 @@
   "scripts": {
     "lint": "biome lint .",
     "format": "biome format --write .",
-    "check": "biome check .",
-    "dev": "pnpm --filter '@web-seek/cli' run dev"
+    "typecheck": "tsc --noEmit",
+    "check": "biome check . && tsc --noEmit",
+    "dev": "bun run apps/cli/index.ts",
+    "cli": "bun run apps/cli/index.ts",
+    "playwright:install": "bunx playwright install chromium"
   },
   "devDependencies": {
     "@biomejs/biome": "^1.9.4",
     "typescript": "^5.7.3",
     "@types/node": "^22.10.2",
     "@types/bun": "latest"
-  }
+  },
+  "workspaces": ["apps/*", "packages/*", "libs/*"]
 }

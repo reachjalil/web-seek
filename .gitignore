@@ -41,3 +41,10 @@ Thumbs.db
 /dist
 /build
 /out
+
+# Runtime artifacts
+recordings/*.json
+exports/*.json
+exports/*.csv
+exports/downloads/
+exports/screenshots/
