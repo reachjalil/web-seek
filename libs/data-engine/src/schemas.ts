@@ -37,17 +37,29 @@ export const recordingFileSchema = z.object({
 
 export type RecordingFile = z.infer<typeof recordingFileSchema>;
 
-export const selectorAttributeSchema = z.enum([
-  "text",
-  "href",
-  "src",
-  "value",
-  "html",
-  "aria-label",
-  "title",
-]);
+export const selectorAttributeSchema = z
+  .string()
+  .min(1)
+  .regex(/^[a-zA-Z_:][-a-zA-Z0-9_:.]*$/)
+  .or(z.enum(["text", "href", "src", "value", "html", "aria-label", "title"]));
 
 export type SelectorAttribute = z.infer<typeof selectorAttributeSchema>;
+
+export const selectorMetaSchema = z.object({
+  strategy: z.enum([
+    "id",
+    "attribute",
+    "text-nearby",
+    "table-position",
+    "structural",
+    "nth-of-type",
+  ]),
+  confidence: z.number().min(0).max(1),
+  alternates: z.array(z.string().min(1)).default([]),
+  sample: z.string().optional(),
+});
+
+export type SelectorMeta = z.infer<typeof selectorMetaSchema>;
 
 export const fieldTransformSchema = z.enum([
   "trim",
@@ -66,6 +78,7 @@ export const fieldSelectorSchema = z.object({
   attribute: selectorAttributeSchema.default("text"),
   required: z.boolean().default(false),
   transform: fieldTransformSchema.optional(),
+  selectorMeta: selectorMetaSchema.optional(),
 });
 
 export type FieldSelector = z.infer<typeof fieldSelectorSchema>;
@@ -101,6 +114,18 @@ export const humanInLoopSchema = z.object({
 });
 
 export type HumanInLoop = z.infer<typeof humanInLoopSchema>;
+
+export const authoringMetadataSchema = z.object({
+  sourceUrl: z.string().url().optional(),
+  createdWith: z.literal("overlay").optional(),
+  lastPreviewRowCount: z.number().int().nonnegative().optional(),
+  recordingId: z.string().optional(),
+  recordingPath: z.string().optional(),
+  recordingEventCount: z.number().int().nonnegative().optional(),
+  notes: z.string().optional(),
+});
+
+export type AuthoringMetadata = z.infer<typeof authoringMetadataSchema>;
 
 const stepBaseSchema = z.object({
   id: z.string().min(1),
@@ -212,6 +237,7 @@ export const siteExtractionConfigSchema = z.object({
     pauseBeforeRun: false,
     challengeDetection: true,
   }),
+  authoring: authoringMetadataSchema.optional(),
   steps: z.array(extractionStepSchema).min(1),
   output: z
     .object({

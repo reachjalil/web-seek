@@ -1,0 +1,23 @@
+@import "tailwindcss";
+
+@theme {
+  --color-ink: #17202a;
+  --color-panel: #f8fafc;
+  --color-signal: #0f766e;
+  --shadow-overlay: 0 18px 60px rgba(15, 23, 42, 0.24);
+}
+
+:host {
+  all: initial;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}

@@ -33,6 +33,7 @@ Menu options:
 - List recordings in `./recordings`.
 - Replay a recording by generating temporary HTML in `./.cache/replays`.
 - Author an extraction config from an interactive browser session.
+- Author an extraction config with the browser overlay.
 - List extraction configs from `./configs/sites`.
 - Run an extraction config and write output to `./exports`.
 - Show the government-site extraction blueprint.
@@ -96,6 +97,18 @@ highlight candidate data regions, and save the detected pattern as a JSON config
 `configs/sites/professional-engineers-license-search-template.json` shows the intended shape for a
 state board lookup site.
 
+The overlay authoring flow builds the React 19 + Tailwind 4 app in `apps/overlay`, injects it into
+the current Playwright page, and mounts a Shadow DOM UI over the target website. Use it to select a
+repeated item or table row, capture relative fields, choose a pagination control, preview rows from
+the current page, inspect the generated config JSON, and save a validated config. The CLI still owns
+filesystem writes and validation; the overlay only sends draft state through a Playwright binding.
+The same browser context also starts an rrweb authoring recording, so the overlay can show live event
+counts and the saved config can point back to the recording that produced it.
+
+In item selection mode, the overlay also preselects likely data shapes as the mouse moves. It
+highlights the suggested repeated records, scores the selector, generates starter fields, and shows a
+floating acceptance panel to accept the suggestion before saving or editing the draft.
+
 Do not bypass CAPTCHA or access controls. Use the human-in-loop pauses for allowed manual actions,
 and verify that each target site's terms permit automated collection.
 
@@ -114,6 +127,7 @@ apps/cli/src/recorder.ts     rrweb recording
 apps/cli/src/replayer.ts     rrweb-player replay HTML
 apps/cli/src/extractor.ts    config runner
 apps/cli/src/config-author.ts browser-assisted config authoring
+apps/cli/src/overlay-author.ts overlay injection and save bridge
+apps/overlay                 React overlay authoring app
 libs/data-engine/src         shared schemas, stores, CSV/JSON utilities
 ```
-

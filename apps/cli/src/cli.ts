@@ -12,6 +12,7 @@ import {
 import Table from "cli-table3";
 import { authorSiteConfig } from "./config-author";
 import { collectInputVariables, runExtractionConfig } from "./extractor";
+import { authorSiteConfigWithOverlay } from "./overlay-author";
 import { unwrapPrompt } from "./prompt-utils";
 import { recordSession } from "./recorder";
 import { replayRecording } from "./replayer";
@@ -23,6 +24,7 @@ type MenuAction =
   | "list-recordings"
   | "replay"
   | "author-config"
+  | "author-overlay-config"
   | "list-configs"
   | "run-config"
   | "blueprint"
@@ -173,6 +175,11 @@ async function createExtractionConfig(): Promise<void> {
   note(`Config saved to ${path}`, "Config saved");
 }
 
+async function createExtractionConfigWithOverlay(): Promise<void> {
+  const path = await authorSiteConfigWithOverlay();
+  note(`Config saved to ${path}`, "Config saved");
+}
+
 async function listConfigs(): Promise<void> {
   const configs = await listSiteConfigs();
   if (configs.length === 0) {
@@ -284,6 +291,7 @@ async function menuLoop(): Promise<void> {
           { value: "list-recordings", label: "List recordings" },
           { value: "replay", label: "Replay a recording" },
           { value: "author-config", label: "Author extraction config from browser" },
+          { value: "author-overlay-config", label: "Author extraction config with overlay" },
           { value: "list-configs", label: "List extraction configs" },
           { value: "run-config", label: "Run extraction config" },
           { value: "blueprint", label: "Show government-site extraction blueprint" },
@@ -301,6 +309,8 @@ async function menuLoop(): Promise<void> {
         await replaySavedRecording();
       } else if (action === "author-config") {
         await createExtractionConfig();
+      } else if (action === "author-overlay-config") {
+        await createExtractionConfigWithOverlay();
       } else if (action === "list-configs") {
         await listConfigs();
       } else if (action === "run-config") {

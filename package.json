@@ -9,6 +9,7 @@
     "check": "biome check . && tsc --noEmit",
     "dev": "bun run apps/cli/index.ts",
     "cli": "bun run apps/cli/index.ts",
+    "overlay:build": "bun run --cwd apps/overlay build",
     "playwright:install": "bunx playwright install chromium"
   },
   "devDependencies": {

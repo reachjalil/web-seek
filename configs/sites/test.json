@@ -1,0 +1,73 @@
+{
+  "schema": "web-seek.site-config.v1",
+  "id": "test",
+  "name": "demo",
+  "jurisdiction": "co",
+  "startUrl": "https://www.npmjs.com/",
+  "description": "Authored from an interactive browser session. Edit selectors and input variables as the site changes.",
+  "tags": [
+    "interactive",
+    "government-data"
+  ],
+  "createdAt": "2026-04-24T04:13:43.028Z",
+  "updatedAt": "2026-04-24T04:13:43.028Z",
+  "browser": {
+    "headless": false,
+    "viewport": {
+      "width": 1440,
+      "height": 1000
+    },
+    "slowMoMs": 0
+  },
+  "humanInLoop": {
+    "enabled": true,
+    "pauseBeforeRun": false,
+    "challengeDetection": true,
+    "instructions": "Use the browser when the CLI requests human action."
+  },
+  "steps": [
+    {
+      "id": "open-start",
+      "label": "Open start URL",
+      "optional": false,
+      "type": "navigate",
+      "url": "https://www.npmjs.com/",
+      "waitUntil": "domcontentloaded"
+    },
+    {
+      "id": "extract-manual-fields",
+      "label": "Manual page-level fields",
+      "optional": false,
+      "type": "extract-list",
+      "itemSelector": "html",
+      "fields": [
+        {
+          "name": "bring_the_best_of_open_source_to_you_your_team_and_your_company",
+          "selector": "main > div > article > section:nth-of-type(2) > div > h2",
+          "attribute": "text",
+          "required": false,
+          "transform": "trim"
+        },
+        {
+          "name": "relied_upon_by_more_than_17_million_developers_worldwide_npm_is_committed_to_mak",
+          "selector": "main > div > article > section:nth-of-type(2) > div > div",
+          "attribute": "text",
+          "required": false,
+          "transform": "trim"
+        },
+        {
+          "name": "sign_up",
+          "selector": "#signup",
+          "attribute": "text",
+          "required": false,
+          "transform": "trim"
+        }
+      ],
+      "outputKey": "record"
+    }
+  ],
+  "output": {
+    "format": "both",
+    "directory": "exports"
+  }
+}

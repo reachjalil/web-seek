@@ -6,7 +6,7 @@ import {
   rrwebEventSchema,
   saveRecording,
 } from "@web-seek/data-engine";
-import type { Page } from "playwright";
+import type { BrowserContext, Page } from "playwright";
 import { createContext, launchChrome } from "./browser";
 import { waitForEnter } from "./terminal";
 
@@ -21,6 +21,35 @@ export interface RecordingOptions {
 export interface RecordingResult {
   path: string;
   recording: RecordingFile;
+}
+
+export interface BrowserRecordingOptions {
+  targetUrl: string;
+  tags?: string[];
+  notes?: string;
+  onEvent?: (eventCount: number) => void;
+}
+
+export interface BrowserRecordingStatus {
+  id: string;
+  startedAt: string;
+  eventCount: number;
+  urlCount: number;
+  durationMs: number;
+}
+
+export interface BrowserRecordingSession {
+  id: string;
+  startedAt: Date;
+  addUrl(url: string): void;
+  status(): BrowserRecordingStatus;
+  save(metadata?: {
+    targetUrl?: string;
+    tags?: string[];
+    notes?: string;
+    userAgent?: string;
+    viewport?: { width: number; height: number };
+  }): Promise<RecordingResult>;
 }
 
 async function readFirstExistingAsset(candidates: string[]): Promise<string> {
@@ -61,11 +90,16 @@ ${rrwebScript}
   };
 
   const start = () => {
-    if (w.__webSeekStopRecorder || !w.rrweb || typeof w.rrweb.record !== "function") {
+    const rrwebApi = w.rrweb || (typeof rrweb !== "undefined" ? rrweb : undefined);
+    if (rrwebApi && !w.rrweb) {
+      w.rrweb = rrwebApi;
+    }
+
+    if (w.__webSeekStopRecorder || !rrwebApi || typeof rrwebApi.record !== "function") {
       return;
     }
 
-    w.__webSeekStopRecorder = w.rrweb.record({
+    w.__webSeekStopRecorder = rrwebApi.record({
       emit,
       checkoutEveryNms: 15000,
       collectFonts: true,
@@ -100,34 +134,90 @@ function attachUrlTracking(page: Page, urls: Set<string>): void {
   });
 }
 
-export async function recordSession(options: RecordingOptions): Promise<RecordingResult> {
+export async function startBrowserRecording(
+  context: BrowserContext,
+  options: BrowserRecordingOptions,
+): Promise<BrowserRecordingSession> {
   const startedAtDate = new Date();
   const id = createRecordingId(startedAtDate);
   const events: RrwebEvent[] = [];
   const urls = new Set<string>([options.targetUrl]);
   const rrwebScript = await loadRrwebScript();
+
+  await context.exposeBinding("webSeekEmitRrweb", (_source, payload: unknown) => {
+    const parsed = rrwebEventSchema.safeParse(payload);
+    if (parsed.success) {
+      events.push(parsed.data);
+      options.onEvent?.(events.length);
+    }
+  });
+
+  await context.addInitScript({ content: buildRecorderInitScript(rrwebScript) });
+
+  const attachPage = (page: Page): void => {
+    urls.add(page.url());
+    attachUrlTracking(page, urls);
+  };
+
+  for (const page of context.pages()) {
+    attachPage(page);
+    await page
+      .addScriptTag({ content: buildRecorderInitScript(rrwebScript) })
+      .catch(() => undefined);
+  }
+  context.on("page", attachPage);
+
+  return {
+    id,
+    startedAt: startedAtDate,
+    addUrl(url: string): void {
+      urls.add(url);
+    },
+    status(): BrowserRecordingStatus {
+      return {
+        id,
+        startedAt: startedAtDate.toISOString(),
+        eventCount: events.length,
+        urlCount: urls.size,
+        durationMs: Date.now() - startedAtDate.getTime(),
+      };
+    },
+    async save(metadata): Promise<RecordingResult> {
+      const stoppedAtDate = new Date();
+      const recording: RecordingFile = {
+        schema: "web-seek.recording.v1",
+        id,
+        targetUrl: metadata?.targetUrl ?? options.targetUrl,
+        startedAt: startedAtDate.toISOString(),
+        stoppedAt: stoppedAtDate.toISOString(),
+        durationMs: stoppedAtDate.getTime() - startedAtDate.getTime(),
+        eventCount: events.length,
+        userAgent: metadata?.userAgent,
+        viewport: metadata?.viewport,
+        urls: Array.from(urls),
+        events,
+        tags: metadata?.tags ?? options.tags ?? [],
+        notes: metadata?.notes ?? options.notes,
+      };
+
+      const path = await saveRecording(recording);
+      return { path, recording };
+    },
+  };
+}
+
+export async function recordSession(options: RecordingOptions): Promise<RecordingResult> {
   const browser = await launchChrome({ headless: false });
+  const context = await createContext(browser, {
+    headless: false,
+    viewport: { width: 1440, height: 1000 },
+  });
 
   try {
-    const context = await createContext(browser, {
-      headless: false,
-      viewport: { width: 1440, height: 1000 },
-    });
-
-    await context.exposeBinding("webSeekEmitRrweb", (_source, payload: unknown) => {
-      const parsed = rrwebEventSchema.safeParse(payload);
-      if (parsed.success) {
-        events.push(parsed.data);
-      }
-    });
-
-    await context.addInitScript({ content: buildRecorderInitScript(rrwebScript) });
-
-    context.on("page", (page) => attachUrlTracking(page, urls));
+    const recording = await startBrowserRecording(context, options);
     const page = await context.newPage();
-    attachUrlTracking(page, urls);
     await page.goto(options.targetUrl, { waitUntil: "domcontentloaded" });
-    urls.add(page.url());
+    recording.addUrl(page.url());
 
     const userAgent = await page.evaluate(() => navigator.userAgent).catch(() => undefined);
     const viewport = page.viewportSize() ?? undefined;
@@ -136,26 +226,9 @@ export async function recordSession(options: RecordingOptions): Promise<Recordin
       "Recording is active. Use the browser normally, then press Enter here to stop recording.",
     );
 
-    const stoppedAtDate = new Date();
-    const recording: RecordingFile = {
-      schema: "web-seek.recording.v1",
-      id,
-      targetUrl: options.targetUrl,
-      startedAt: startedAtDate.toISOString(),
-      stoppedAt: stoppedAtDate.toISOString(),
-      durationMs: stoppedAtDate.getTime() - startedAtDate.getTime(),
-      eventCount: events.length,
-      userAgent,
-      viewport,
-      urls: Array.from(urls),
-      events,
-      tags: options.tags ?? [],
-      notes: options.notes,
-    };
-
-    const path = await saveRecording(recording);
+    const result = await recording.save({ userAgent, viewport });
     await context.close();
-    return { path, recording };
+    return result;
   } finally {
     await browser.close();
   }
