@@ -86,7 +86,6 @@ const TRANSFORM_OPTIONS: Array<{ value: FieldTransform | ""; label: string }> = 
   { value: "date", label: "date" },
   { value: "uppercase", label: "uppercase" },
   { value: "lowercase", label: "lowercase" },
-  { value: "license-status", label: "license-status" },
   { value: "", label: "none" },
 ];
 const FIELD_TRANSFORMS = new Set<FieldTransform>(
@@ -249,6 +248,41 @@ function confidenceLabel(value: number | undefined): string {
   return `${percent(value)}%`;
 }
 
+function inferredScenarioLabel(draft: OverlayDraft, previewCount: number): string {
+  if (draft.actions.length > 0 && draft.pagination) {
+    return "Search or setup flow with pagination";
+  }
+  if (draft.actions.length > 0) {
+    return "Search or setup flow before capture";
+  }
+  if (draft.pagination) {
+    return "Paginated results capture";
+  }
+  if (previewCount > 0 || draft.fields.length > 0) {
+    return "Current-page data capture";
+  }
+  return "Undecided authoring flow";
+}
+
+function suggestedNextStep(draft: OverlayDraft, previewCount: number): string {
+  if (draft.actions.length === 0 && !draft.itemSelector) {
+    return "If the page needs search/filtering, record navigation actions first; otherwise select the repeated data shape.";
+  }
+  if (!draft.itemSelector) {
+    return "Select one repeated row, card, or table record.";
+  }
+  if (draft.fields.length === 0) {
+    return "Add the fields that should appear in each extracted row.";
+  }
+  if (previewCount === 0) {
+    return "Run preview and compare the rows against the visible page.";
+  }
+  if (!draft.pagination) {
+    return "Add pagination only if the data continues onto another page.";
+  }
+  return "Review the agent guide, then save the validated config.";
+}
+
 function buildAgentGuideMarkdown(
   draft: OverlayDraft,
   previewCount: number,
@@ -258,7 +292,11 @@ function buildAgentGuideMarkdown(
   const lines = [
     `# Web Seek Agent Guide: ${draft.name}`,
     "",
-    "Use this as the workflow contract for reproducing the browser task. Keep the run bounded, respect access controls, and pause for any CAPTCHA or human-only decision.",
+    "Use this as the workflow contract for reproducing the browser task. Keep the run bounded, respect access controls, and pause for any human-only decision.",
+    "",
+    "## Scenario",
+    `- Inferred scenario: ${inferredScenarioLabel(draft, previewCount)}`,
+    `- Next recommended step: ${suggestedNextStep(draft, previewCount)}`,
     "",
     "## 1. Navigate",
     `- Start URL: ${draft.startUrl}`,
@@ -317,7 +355,9 @@ function buildAgentGuideMarkdown(
   lines.push(
     "- Use selectors as hypotheses; verify visible row counts against the page before a full run.",
   );
-  lines.push("- Never bypass CAPTCHA, paywalls, authentication, rate limits, or terms screens.");
+  lines.push(
+    "- Do not bypass access controls, paywalls, authentication, rate limits, anti-bot checks, or terms screens.",
+  );
 
   return lines.join("\n");
 }
@@ -455,7 +495,7 @@ function normalizeDraftFromJson(value: unknown, previous: OverlayDraft): Overlay
   return {
     id: stringValue(record.id, previous.id),
     name: stringValue(record.name, previous.name),
-    jurisdiction: optionalString(record.jurisdiction),
+    group: optionalString(record.group) ?? optionalString(record.jurisdiction),
     startUrl: stringValue(record.startUrl, previous.startUrl),
     sourceUrl: stringValue(record.sourceUrl, previous.sourceUrl),
     extractionKind: record.extractionKind === "table" ? "table" : "list",
@@ -1444,6 +1484,91 @@ function DefinitionFlow({
   );
 }
 
+function ScenarioCard({
+  label,
+  description,
+  status,
+  active,
+  onClick,
+}: {
+  label: string;
+  description: string;
+  status: "ready" | "missing" | "output" | "optional";
+  active: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={[
+        "flex min-w-0 flex-col gap-1 rounded-[3px] border px-2 py-2 text-left",
+        active
+          ? "border-teal-700 bg-teal-50"
+          : "border-slate-950/10 bg-white hover:border-slate-950/30",
+      ].join(" ")}
+    >
+      <span className="flex min-w-0 items-center justify-between gap-2">
+        <span className="truncate text-xs font-bold text-slate-900">{label}</span>
+        <LayerStatusBadge status={status} />
+      </span>
+      <span className="text-[10px] leading-4 text-slate-500">{description}</span>
+    </button>
+  );
+}
+
+function ScenarioPlaybook({
+  draft,
+  previewCount,
+  onSelect,
+}: {
+  draft: OverlayDraft;
+  previewCount: number;
+  onSelect: (tab: PanelTab, mode?: PickerMode, layer?: string) => void;
+}) {
+  const captureReady = Boolean(draft.itemSelector && draft.fields.length > 0);
+  const inferred = inferredScenarioLabel(draft, previewCount);
+
+  return (
+    <div className="space-y-2">
+      <div className="rounded-[3px] border border-slate-950/10 bg-slate-50 px-2 py-1.5 text-[10px] leading-4 text-slate-600">
+        <span className="font-bold text-slate-700">Current fit:</span> {inferred}.{" "}
+        {suggestedNextStep(draft, previewCount)}
+      </div>
+      <div className="grid grid-cols-2 gap-2">
+        <ScenarioCard
+          label="Direct capture"
+          description="The current page already shows the records. Pick shape, fields, then preview."
+          status={captureReady && draft.actions.length === 0 ? "ready" : "optional"}
+          active={draft.actions.length === 0 && !draft.pagination}
+          onClick={() => onSelect(draft.itemSelector ? "fields" : "shape", "item", "shape")}
+        />
+        <ScenarioCard
+          label="Search first"
+          description="Record search, filters, login renewal, or setup clicks before extraction."
+          status={draft.actions.length > 0 ? "ready" : "optional"}
+          active={draft.actions.length > 0}
+          onClick={() => onSelect("actions", "action", "actions")}
+        />
+        <ScenarioCard
+          label="Loop results"
+          description="Use when Next, load-more, or pagination must repeat bounded pages."
+          status={draft.pagination ? "ready" : "optional"}
+          active={Boolean(draft.pagination)}
+          onClick={() => onSelect("shape", "pagination", "pagination")}
+        />
+        <ScenarioCard
+          label="Agent handoff"
+          description="Generate instructions for another agent to reproduce and verify the run."
+          status={draftIsSavable(draft) ? "ready" : "missing"}
+          active={previewCount > 0 || draftIsSavable(draft)}
+          onClick={() => onSelect("guide", undefined, "guide")}
+        />
+      </div>
+    </div>
+  );
+}
+
 function TimelineLayers({
   draft,
   previewCount,
@@ -2351,7 +2476,12 @@ function DiagnosticsPanel({ draft }: { draft: OverlayDraft }) {
 export function App({ host }: AppProps) {
   const initialDraft = window.__WEB_SEEK_OVERLAY_INIT__?.draft;
   const startingDraft: OverlayDraft = initialDraft
-    ? { ...initialDraft, actions: initialDraft.actions ?? [] }
+    ? {
+        ...initialDraft,
+        group: initialDraft.group ?? initialDraft.jurisdiction,
+        jurisdiction: undefined,
+        actions: initialDraft.actions ?? [],
+      }
     : {
         id: "overlay-config",
         name: "Overlay Config",
@@ -2381,7 +2511,7 @@ export function App({ host }: AppProps) {
   const [recording, setRecording] = useState<RecordingState | undefined>(
     window.__WEB_SEEK_OVERLAY_INIT__?.recording,
   );
-  const [status, setStatus] = useState("Ready");
+  const [status, setStatus] = useState(startingDraft.notes ?? "Ready");
   const [saving, setSaving] = useState(false);
   const [draftJson, setDraftJson] = useState(() => JSON.stringify(startingDraft, null, 2));
   const [draftJsonDirty, setDraftJsonDirty] = useState(false);
@@ -3157,6 +3287,25 @@ export function App({ host }: AppProps) {
                   draft={draft}
                   previewCount={deferredPreviewRows.length}
                   activeTab={activeTab}
+                  onSelect={(tab, nextMode, layer) => {
+                    setActiveTab(tab);
+                    setActiveLayer(layer ?? tab);
+                    if (nextMode) {
+                      setMode(nextMode);
+                    }
+                  }}
+                />
+              </InspectorSection>
+
+              <InspectorSection
+                title="Scenario playbook"
+                subtitle="Pick the workflow pattern that matches the site."
+                count={inferredScenarioLabel(draft, deferredPreviewRows.length)}
+                defaultOpen={false}
+              >
+                <ScenarioPlaybook
+                  draft={draft}
+                  previewCount={deferredPreviewRows.length}
                   onSelect={(tab, nextMode, layer) => {
                     setActiveTab(tab);
                     setActiveLayer(layer ?? tab);

@@ -1,0 +1,108 @@
+{
+  "schema": "web-seek.site-config.v1",
+  "id": "web-extraction-template",
+  "name": "Generic Web Extraction Template",
+  "group": "Template",
+  "startUrl": "https://example.com/search",
+  "description": "Template for a bounded search-results workflow. Replace selectors and URL with the target site's public page.",
+  "tags": ["template", "web-extraction", "interactive"],
+  "createdAt": "2026-04-24T00:00:00.000Z",
+  "updatedAt": "2026-04-24T00:00:00.000Z",
+  "browser": {
+    "headless": false,
+    "viewport": {
+      "width": 1440,
+      "height": 1000
+    },
+    "slowMoMs": 50
+  },
+  "humanInLoop": {
+    "enabled": true,
+    "pauseBeforeRun": false,
+    "challengeDetection": true,
+    "instructions": "If a terms screen, login, anti-bot check, or session timeout appears, complete only permitted manual steps in the browser and return to the CLI."
+  },
+  "steps": [
+    {
+      "id": "open-search-page",
+      "type": "navigate",
+      "label": "Open search page",
+      "optional": false,
+      "url": "https://example.com/search",
+      "waitUntil": "domcontentloaded"
+    },
+    {
+      "id": "human-review-search-page",
+      "type": "human-checkpoint",
+      "label": "Review search page",
+      "optional": false,
+      "reason": "Confirm the page is loaded, complete any permitted human-only step, and continue when the data view is ready."
+    },
+    {
+      "id": "fill-query",
+      "type": "fill",
+      "label": "Search query",
+      "optional": true,
+      "selector": "input[type='search'], input[name='q']",
+      "value": "{{input:query|Search query, or blank for all}}",
+      "timeoutMs": 15000
+    },
+    {
+      "id": "submit-search",
+      "type": "click",
+      "label": "Submit search",
+      "optional": true,
+      "selector": "button[type='submit'], input[type='submit']",
+      "timeoutMs": 15000
+    },
+    {
+      "id": "wait-results",
+      "type": "wait-for-selector",
+      "label": "Wait for results",
+      "optional": false,
+      "selector": ".result, .result-item, article, table.results",
+      "timeoutMs": 30000
+    },
+    {
+      "id": "extract-results",
+      "type": "extract-list",
+      "label": "Extract result items",
+      "optional": false,
+      "itemSelector": ".result, .result-item, article",
+      "fields": [
+        {
+          "name": "title",
+          "selector": "h1, h2, h3, a",
+          "attribute": "text",
+          "required": true,
+          "transform": "trim"
+        },
+        {
+          "name": "url",
+          "selector": "a",
+          "attribute": "href",
+          "required": false,
+          "transform": "trim"
+        },
+        {
+          "name": "summary",
+          "selector": "p, .summary, .description",
+          "attribute": "text",
+          "required": false,
+          "transform": "trim"
+        }
+      ],
+      "pagination": {
+        "nextSelector": "a[rel='next'], button[aria-label='Next'], .next",
+        "maxPages": 10,
+        "waitAfterMs": 1000,
+        "stopWhenSelectorDisabled": true
+      },
+      "outputKey": "items"
+    }
+  ],
+  "output": {
+    "format": "both",
+    "directory": "exports"
+  }
+}

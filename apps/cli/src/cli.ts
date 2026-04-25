@@ -51,7 +51,7 @@ function renderRecordings(recordings: RecordingEntry[]): void {
 
 function renderConfigs(configs: ConfigEntry[]): void {
   const table = new Table({
-    head: ["ID", "Name", "Jurisdiction", "Steps", "Start URL"],
+    head: ["ID", "Name", "Group", "Steps", "Start URL"],
     colWidths: [32, 34, 22, 8, 70],
     wordWrap: true,
   });
@@ -60,7 +60,7 @@ function renderConfigs(configs: ConfigEntry[]): void {
     table.push([
       config.id,
       config.name,
-      config.jurisdiction ?? "-",
+      config.group ?? "-",
       config.stepCount.toString(),
       config.startUrl,
     ]);
@@ -103,7 +103,7 @@ async function chooseConfig(): Promise<ConfigEntry | undefined> {
       options: configs.map((config) => ({
         value: config.path,
         label: `${config.name} (${config.id})`,
-        hint: config.jurisdiction ?? config.startUrl,
+        hint: config.group ?? config.startUrl,
       })),
     }),
   );
@@ -132,7 +132,7 @@ async function startRecording(): Promise<void> {
   const tagText = await unwrapPrompt(
     text({
       message: "Tags (comma-separated, optional)",
-      placeholder: "research, state-board",
+      placeholder: "research, catalog",
     }),
   );
 
@@ -231,7 +231,7 @@ async function runConfig(): Promise<void> {
   }
 }
 
-function showGovernmentScrapingBlueprint(): void {
+function showExtractionBlueprint(): void {
   const table = new Table({
     head: ["Page type", "What to detect", "Config strategy"],
     colWidths: [24, 46, 64],
@@ -241,7 +241,7 @@ function showGovernmentScrapingBlueprint(): void {
   table.push(
     [
       "Search form",
-      "License number/name/profession fields, hidden CSRF values, submit buttons.",
+      "Keyword/category filters, hidden CSRF values, submit buttons.",
       "Store fill/select/click steps with {{input:name}} variables and a human checkpoint before submit.",
     ],
     [
@@ -265,22 +265,22 @@ function showGovernmentScrapingBlueprint(): void {
       "Prefer download steps when exports are public and complete; store raw files beside normalized output.",
     ],
     [
-      "CAPTCHA/login",
-      "reCAPTCHA/hCaptcha/Turnstile iframes, access-denied copy.",
-      "Never bypass. Pause with human-in-loop, then resume from the same browser context.",
+      "Human-only gates",
+      "CAPTCHA, terms, login, session timeout, or access-denied copy.",
+      "Never bypass controls. Pause with human-in-loop, then resume from the same browser context.",
     ],
   );
 
   console.log(table.toString());
   note(
-    "The durable unit is a JSON site config per jurisdiction. Recordings explain what happened; configs make it repeatable.",
+    "The durable unit is a JSON site config per site workflow. Recordings explain what happened; configs make it repeatable.",
     "Design principle",
   );
 }
 
 async function menuLoop(): Promise<void> {
   console.log(formatTitle("Web Seek"));
-  intro("rrweb recording, replay, and config-first public data extraction");
+  intro("rrweb recording, replay, and config-first web extraction");
 
   while (true) {
     const action = await unwrapPrompt(
@@ -294,7 +294,7 @@ async function menuLoop(): Promise<void> {
           { value: "author-overlay-config", label: "Author extraction config with overlay" },
           { value: "list-configs", label: "List extraction configs" },
           { value: "run-config", label: "Run extraction config" },
-          { value: "blueprint", label: "Show government-site extraction blueprint" },
+          { value: "blueprint", label: "Show extraction workflow blueprint" },
           { value: "exit", label: "Exit" },
         ],
       }),
@@ -316,7 +316,7 @@ async function menuLoop(): Promise<void> {
       } else if (action === "run-config") {
         await runConfig();
       } else if (action === "blueprint") {
-        showGovernmentScrapingBlueprint();
+        showExtractionBlueprint();
       } else {
         outro("Goodbye.");
         return;

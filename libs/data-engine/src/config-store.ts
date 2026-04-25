@@ -7,6 +7,7 @@ import { type SiteExtractionConfig, siteExtractionConfigSchema } from "./schemas
 export interface ConfigEntry {
   id: string;
   name: string;
+  group?: string;
   jurisdiction?: string;
   path: string;
   updatedAt: string;
@@ -45,6 +46,7 @@ export async function listSiteConfigs(): Promise<ConfigEntry[]> {
       configs.push({
         id: config.id,
         name: config.name,
+        group: config.group ?? config.jurisdiction,
         jurisdiction: config.jurisdiction,
         path,
         updatedAt: config.updatedAt,

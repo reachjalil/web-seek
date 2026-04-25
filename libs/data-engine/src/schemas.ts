@@ -230,6 +230,7 @@ export const siteExtractionConfigSchema = z.object({
   schema: z.literal("web-seek.site-config.v1"),
   id: z.string().min(1),
   name: z.string().min(1),
+  group: z.string().optional(),
   jurisdiction: z.string().optional(),
   startUrl: z.string().url(),
   description: z.string().optional(),

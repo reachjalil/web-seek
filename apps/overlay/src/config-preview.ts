@@ -183,11 +183,11 @@ export function buildGeneratedConfigPreview(
     schema: "web-seek.site-config.v1",
     id: draft.id,
     name: draft.name,
-    jurisdiction: normalizeOptionalText(draft.jurisdiction),
+    group: normalizeOptionalText(draft.group ?? draft.jurisdiction),
     startUrl: draft.startUrl,
     description:
       "Authored with the browser overlay. Edit selectors and input variables as the site changes.",
-    tags: ["overlay", "interactive", "government-data"],
+    tags: ["overlay", "interactive", "web-extraction"],
     createdAt: now,
     updatedAt: now,
     browser: {

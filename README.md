@@ -1,8 +1,9 @@
 # Web Seek
 
-Bun + TypeScript CLI for recording, replaying, and repeating browser workflows against public web
-data sources. It records sessions in the `rrweb` event format, replays them with `rrweb-player`, and
-stores extraction workflows as JSON configs that can be rerun with a human in the loop.
+Bun + TypeScript CLI for recording, replaying, and repeating browser workflows against web data
+sources. It records sessions in the `rrweb` event format, replays them with `rrweb-player`, and
+stores extraction workflows as JSON configs that can be rerun with bounded automation and a human in
+the loop when needed.
 
 ## Setup
 
@@ -36,7 +37,7 @@ Menu options:
 - Author an extraction config with the browser overlay.
 - List extraction configs from `./configs/sites`.
 - Run an extraction config and write output to `./exports`.
-- Show the government-site extraction blueprint.
+- Show the extraction workflow blueprint.
 
 ## Recording
 
@@ -61,7 +62,7 @@ Chrome, and waits for you to press Enter before closing the browser.
 The durable unit for repeatable scraping is a site config:
 
 ```text
-configs/sites/<jurisdiction-or-site>.json
+configs/sites/<site-or-workflow>.json
 ```
 
 A config describes:
@@ -81,11 +82,12 @@ Input variables use this pattern:
 When the config runs, the CLI prompts for those values and substitutes them into fill/select/navigate
 steps.
 
-## Government Website Patterns
+## Common Web Extraction Patterns
 
-For a state professional engineer license search, expect one or more of these page types:
+For a repeatable web extraction workflow, expect one or more of these page types:
 
-- Search forms with last name, license number, profession, county, status, or hidden CSRF fields.
+- Search forms with keywords, category filters, status filters, location fields, or hidden CSRF
+  fields.
 - Results tables with server-side pagination.
 - Repeated list/card layouts where each record links to a detail page.
 - Infinite scroll or "load more" result pages.
@@ -94,8 +96,8 @@ For a state professional engineer license search, expect one or more of these pa
 
 The interactive authoring flow lets you navigate manually, solve challenges, run page analysis,
 highlight candidate data regions, and save the detected pattern as a JSON config. The template at
-`configs/sites/professional-engineers-license-search-template.json` shows the intended shape for a
-state board lookup site.
+`configs/sites/web-extraction-template.json` shows the intended shape for a generic search-results
+workflow.
 
 The overlay authoring flow builds the React 19 + Tailwind 4 app in `apps/overlay`, injects it into
 the current Playwright page, and mounts a Shadow DOM UI over the target website. Use it to select a
@@ -118,6 +120,12 @@ handle, and resized from the lower-right grip so it can stay out of the target p
 Panel content is split into reusable collapsible inspector sections. The layers section groups
 structure, fields, recorded actions, and outputs, with explicit ready/todo/view status badges so the
 green check state is clear instead of looking like a checkbox.
+The overlay also provides a four-step definition flow inspired by visual agent-feedback tools:
+Navigate, Capture, Loop, and Verify. The Guide tab turns the current draft into copyable markdown
+that tells another agent how to reproduce the browser workflow, which selectors to trust, when to
+paginate, and what to verify before running extraction.
+The scenario playbook optimizes those steps around common authoring cases: direct current-page
+capture, search/filter setup before capture, bounded pagination loops, and agent handoff.
 
 Use the Actions mode in the floating toolbar to record a bounded interaction flow directly on the
 site. The overlay captures clicks, fills, selects, scroll position, pointer movement counts, and
@@ -128,8 +136,9 @@ In item selection mode, the overlay also preselects likely data shapes as the mo
 highlights the suggested repeated records, scores the selector, generates starter fields, and shows a
 floating acceptance panel to accept the suggestion before saving or editing the draft.
 
-Do not bypass CAPTCHA or access controls. Use the human-in-loop pauses for allowed manual actions,
-and verify that each target site's terms permit automated collection.
+Do not bypass access controls, paywalls, authentication, rate limits, anti-bot checks, or terms
+screens. Use the human-in-loop pauses for allowed manual actions, and verify that each target site's
+terms permit automated collection.
 
 ## Development
 

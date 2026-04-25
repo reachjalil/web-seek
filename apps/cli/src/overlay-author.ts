@@ -12,7 +12,7 @@ import {
   saveSiteConfig,
 } from "@web-seek/data-engine";
 import type { Page } from "playwright";
-import { createContext, launchChrome } from "./browser";
+import { createContext, gotoWithRecovery, launchChrome } from "./browser";
 import { unwrapPrompt } from "./prompt-utils";
 import {
   type BrowserRecordingSession,
@@ -73,6 +73,7 @@ type OverlayDraftAction =
 interface OverlayDraft {
   id: string;
   name: string;
+  group?: string;
   jurisdiction?: string;
   startUrl: string;
   sourceUrl: string;
@@ -302,11 +303,11 @@ function buildConfigFromDraft(
     schema: "web-seek.site-config.v1",
     id: safeSlug(draft.id),
     name: draft.name.trim(),
-    jurisdiction: normalizeOptionalText(draft.jurisdiction ?? ""),
+    group: normalizeOptionalText(draft.group ?? draft.jurisdiction ?? ""),
     startUrl: draft.startUrl,
     description:
       "Authored with the browser overlay. Edit selectors and input variables as the site changes.",
-    tags: ["overlay", "interactive", "government-data"],
+    tags: ["overlay", "interactive", "web-extraction"],
     createdAt: now,
     updatedAt: now,
     browser: {
@@ -357,6 +358,7 @@ async function injectOverlay(
     userAgent?: string;
     viewport?: { width: number; height: number };
   },
+  promoteStartUrlOnNavigation = false,
 ): Promise<string> {
   let latestDraft = initialDraft;
   let savedRecording: RecordingResult | undefined;
@@ -433,40 +435,71 @@ async function injectOverlay(
     },
   );
 
-  await page.evaluate(
-    ({ bridgeName, css, draft, initialRecording }) => {
-      const bridge = (window as unknown as Record<string, (message: unknown) => Promise<unknown>>)[
-        bridgeName
-      ];
-      window.__WEB_SEEK_OVERLAY_CSS__ = css;
-      window.__WEB_SEEK_OVERLAY_INIT__ = { draft, recording: initialRecording };
-      window.webSeekBridge = {
-        send(message) {
-          return bridge(message) as Promise<{
-            ok: boolean;
-            path?: string;
-            error?: string;
-            recording?: {
-              id: string;
-              startedAt: string;
-              eventCount: number;
-              urlCount: number;
-              durationMs: number;
-              path?: string;
-            };
-          }>;
-        },
+  const installOverlay = async (optional = false): Promise<void> => {
+    try {
+      const currentUrl = page.url();
+      const currentPageUrl =
+        currentUrl && currentUrl !== "about:blank" && !currentUrl.startsWith("chrome-error://")
+          ? currentUrl
+          : undefined;
+      const draftForPage: OverlayDraft = {
+        ...latestDraft,
+        startUrl:
+          promoteStartUrlOnNavigation &&
+          currentPageUrl &&
+          latestDraft.startUrl === initialDraft.startUrl
+            ? currentPageUrl
+            : latestDraft.startUrl,
+        sourceUrl: currentPageUrl ?? latestDraft.sourceUrl,
       };
-    },
-    {
-      bridgeName: BRIDGE_NAME,
-      css: assets.css,
-      draft: initialDraft,
-      initialRecording: recordingStatus(),
-    },
-  );
+      latestDraft = draftForPage;
 
-  await page.addScriptTag({ content: assets.js });
+      await page.evaluate(
+        ({ bridgeName, css, draft, initialRecording }) => {
+          const bridge = (
+            window as unknown as Record<string, (message: unknown) => Promise<unknown>>
+          )[bridgeName];
+          window.__WEB_SEEK_OVERLAY_CSS__ = css;
+          window.__WEB_SEEK_OVERLAY_INIT__ = { draft, recording: initialRecording };
+          window.webSeekBridge = {
+            send(message) {
+              return bridge(message) as Promise<{
+                ok: boolean;
+                path?: string;
+                error?: string;
+                recording?: {
+                  id: string;
+                  startedAt: string;
+                  eventCount: number;
+                  urlCount: number;
+                  durationMs: number;
+                  path?: string;
+                };
+              }>;
+            },
+          };
+        },
+        {
+          bridgeName: BRIDGE_NAME,
+          css: assets.css,
+          draft: draftForPage,
+          initialRecording: recordingStatus(),
+        },
+      );
+
+      await page.addScriptTag({ content: assets.js });
+    } catch (error) {
+      if (!optional) {
+        throw error;
+      }
+    }
+  };
+
+  page.on("domcontentloaded", () => {
+    void installOverlay(true);
+  });
+
+  await installOverlay();
   return saved;
 }
 
@@ -474,7 +507,7 @@ export async function authorSiteConfigWithOverlay(): Promise<string> {
   const id = await unwrapPrompt(
     text({
       message: "Config id",
-      placeholder: "colorado-professional-engineers",
+      placeholder: "npm-packages",
       validate(value) {
         if (!value) {
           return "Config id is required.";
@@ -486,7 +519,7 @@ export async function authorSiteConfigWithOverlay(): Promise<string> {
   const name = await unwrapPrompt(
     text({
       message: "Display name",
-      placeholder: "Colorado Professional Engineers",
+      placeholder: "npm Package Directory",
       validate(value) {
         if (!value) {
           return "Display name is required.";
@@ -495,10 +528,10 @@ export async function authorSiteConfigWithOverlay(): Promise<string> {
       },
     }),
   );
-  const jurisdiction = await unwrapPrompt(
+  const siteGroup = await unwrapPrompt(
     text({
-      message: "Jurisdiction or state",
-      placeholder: "Colorado",
+      message: "Site group or category",
+      placeholder: "Package registry",
     }),
   );
   const startUrl = await unwrapPrompt(
@@ -525,28 +558,49 @@ export async function authorSiteConfigWithOverlay(): Promise<string> {
     const page = await context.newPage();
     const s = spinner();
     s.start("Opening target page");
-    await page.goto(startUrl, { waitUntil: "domcontentloaded" });
+    const navigation = await gotoWithRecovery(page, startUrl, { waitUntil: "domcontentloaded" });
     recording.addUrl(page.url());
-    s.stop("Target page opened");
+    if (navigation.correctedFrom) {
+      s.stop("Opened suggested URL");
+      note(navigation.warning ?? `Opened ${navigation.finalUrl} instead.`, "URL corrected");
+    } else if (navigation.failed) {
+      s.stop("Opened recovery page");
+      note(
+        navigation.warning ??
+          "The start URL could not be opened. Correct it in the browser address bar to continue.",
+        "Navigation needs attention",
+      );
+    } else {
+      s.stop("Target page opened");
+    }
     const userAgent = await page.evaluate(() => navigator.userAgent).catch(() => undefined);
     const viewport = page.viewportSize() ?? undefined;
+    const authoredStartUrl = navigation.failed ? startUrl : navigation.finalUrl;
 
     const draft: OverlayDraft = {
       id: safeSlug(id),
       name,
-      jurisdiction: normalizeOptionalText(jurisdiction),
-      startUrl,
+      group: normalizeOptionalText(siteGroup),
+      startUrl: authoredStartUrl,
       sourceUrl: page.url(),
       extractionKind: "list",
       fields: [],
       actions: [],
+      notes: navigation.warning,
     };
 
     note(
       "Recording is active. Use the floating overlay toolbar in Chrome to record actions, select data, preview, then save.",
       "Overlay ready",
     );
-    return await injectOverlay(page, assets, draft, recording, { userAgent, viewport });
+    return await injectOverlay(
+      page,
+      assets,
+      draft,
+      recording,
+      { userAgent, viewport },
+      navigation.failed,
+    );
   } finally {
     await context.close();
     await browser.close();

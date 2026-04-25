@@ -7,7 +7,7 @@ import {
 } from "@web-seek/data-engine";
 import Table from "cli-table3";
 import type { Page } from "playwright";
-import { createContext, launchChrome } from "./browser";
+import { createContext, gotoWithRecovery, launchChrome } from "./browser";
 import {
   type PageCandidate,
   analyzeCurrentPage,
@@ -222,7 +222,7 @@ export async function authorSiteConfig(): Promise<string> {
   const id = await unwrapPrompt(
     text({
       message: "Config id",
-      placeholder: "colorado-professional-engineers",
+      placeholder: "npm-packages",
       validate(value) {
         if (!value) {
           return "Config id is required.";
@@ -234,7 +234,7 @@ export async function authorSiteConfig(): Promise<string> {
   const name = await unwrapPrompt(
     text({
       message: "Display name",
-      placeholder: "Colorado Professional Engineers",
+      placeholder: "npm Package Directory",
       validate(value) {
         if (!value) {
           return "Display name is required.";
@@ -243,10 +243,10 @@ export async function authorSiteConfig(): Promise<string> {
       },
     }),
   );
-  const jurisdiction = await unwrapPrompt(
+  const siteGroup = await unwrapPrompt(
     text({
-      message: "Jurisdiction or state",
-      placeholder: "Colorado",
+      message: "Site group or category",
+      placeholder: "Package registry",
     }),
   );
   const startUrl = await unwrapPrompt(
@@ -277,8 +277,20 @@ export async function authorSiteConfig(): Promise<string> {
     const page = await context.newPage();
     const s = spinner();
     s.start("Opening target page");
-    await page.goto(startUrl, { waitUntil: "domcontentloaded" });
-    s.stop("Target page opened");
+    const navigation = await gotoWithRecovery(page, startUrl, { waitUntil: "domcontentloaded" });
+    if (navigation.correctedFrom) {
+      s.stop("Opened suggested URL");
+      note(navigation.warning ?? `Opened ${navigation.finalUrl} instead.`, "URL corrected");
+    } else if (navigation.failed) {
+      s.stop("Opened recovery page");
+      note(
+        navigation.warning ??
+          "The start URL could not be opened. Correct it in the browser address bar to continue.",
+        "Navigation needs attention",
+      );
+    } else {
+      s.stop("Target page opened");
+    }
 
     await waitForEnter(
       "Navigate, search, or solve any challenge until the browser shows the data page. Press Enter here to analyze it.",
@@ -370,7 +382,8 @@ export async function authorSiteConfig(): Promise<string> {
         type: "human-checkpoint",
         label: "Human review",
         optional: false,
-        reason: "Review the page, solve CAPTCHA if present, and confirm the data page is ready.",
+        reason:
+          "Review the page, complete any permitted human-only step, and confirm the data page is ready.",
       });
     }
     steps.push(extractionStep);
@@ -379,11 +392,11 @@ export async function authorSiteConfig(): Promise<string> {
       schema: "web-seek.site-config.v1",
       id: safeSlug(id),
       name,
-      jurisdiction: jurisdiction || undefined,
-      startUrl,
+      group: siteGroup || undefined,
+      startUrl: currentUrl,
       description:
         "Authored from an interactive browser session. Edit selectors and input variables as the site changes.",
-      tags: ["interactive", "government-data"],
+      tags: ["interactive", "web-extraction"],
       createdAt: now,
       updatedAt: now,
       browser: {

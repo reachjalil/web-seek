@@ -61,6 +61,7 @@ export interface DraftAction {
 export interface OverlayDraft {
   id: string;
   name: string;
+  group?: string;
   jurisdiction?: string;
   startUrl: string;
   sourceUrl: string;
