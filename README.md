@@ -1,9 +1,11 @@
 # Web Seek
 
-Bun + TypeScript CLI for recording, replaying, and repeating browser workflows against web data
-sources. It records sessions in the `rrweb` event format, replays them with `rrweb-player`, and
-stores extraction workflows as JSON configs that can be rerun with bounded automation and a human in
-the loop when needed.
+Local, authorized extraction workflow authoring and browser-flow QA replay.
+
+Web Seek is config-first. The primary path is to open a site in headed Chrome, record any bounded
+setup actions, identify the repeated records and fields to capture, preview the rows, and save a
+validated `web-seek.site-config.v1` JSON config under `configs/sites/`. Browser-flow recording still
+exists as a QA/debug replay tool under `flows/`.
 
 ## Setup
 
@@ -16,62 +18,56 @@ bun run cli
 
 The important runtime dependencies are:
 
-- `playwright` for headed Chrome automation.
-- `rrweb` for DOM/session event capture.
-- `rrweb-player` for local replay HTML.
+- `playwright` for headed Chrome authoring, extraction, and replay.
 - `@clack/prompts` and `cli-table3` for the interactive terminal UI.
-- `zod` for validating saved recording and site config JSON.
+- `zod` for validating saved configs, browser flows, and run results.
 
-## CLI Flows
+## CLI
 
 ```bash
 bun run cli
 ```
 
-Menu options:
-
-- Start a new rrweb recording.
-- List recordings in `./recordings`.
-- Replay a recording by generating temporary HTML in `./.cache/replays`.
-- Author an extraction config from an interactive browser session.
-- Author an extraction config with the browser overlay.
-- List extraction configs from `./configs/sites`.
-- Run an extraction config and write output to `./exports`.
-- Show the extraction workflow blueprint.
-
-## Recording
-
-The recorder launches Chrome, navigates to a target URL, injects the local `rrweb` browser bundle,
-and streams emitted rrweb events back to Bun through a Playwright binding.
-
-Recordings are saved as:
+Menu:
 
 ```text
-recordings/session-<unix-seconds>.json
+Web Seek
+Config-first extraction workflow authoring and QA replay
+
+? What would you like to do?
+  Create extraction workflow
+  Run extraction workflow
+  Create browser flow (QA debug)
+  Replay browser flow (QA debug)
+  Exit
 ```
 
-Each file contains metadata, visited URLs, viewport/user agent, and the raw `rrweb` events.
+Use extraction workflows when you want structured output in JSON/CSV. Use browser flows when you
+want to replay and debug a QA path with step-level captures/assertions.
 
-## Replay
+Detailed operator docs:
 
-Replay reads a recording JSON file, generates a local HTML page with `rrweb-player`, launches
-Chrome, and waits for you to press Enter before closing the browser.
+- [User guide](docs/USER_GUIDE.md)
+- [Authoring checklist](docs/AUTHORING_CHECKLIST.md)
 
-## Config-First Extraction
+## Extraction Workflows
 
-The durable unit for repeatable scraping is a site config:
+Extraction workflows are saved as:
 
 ```text
-configs/sites/<site-or-workflow>.json
+configs/sites/<workflow-id>.json
+exports/<workflow-id>-<timestamp>.json
+exports/<workflow-id>-<timestamp>.csv
 ```
 
-A config describes:
+Each config describes:
 
-- Browser profile: headed/headless, viewport, slow motion.
-- Human-in-loop policy: pause before run, challenge detection, instructions.
-- Workflow steps: navigate, fill, select, click, wait, screenshot, download, human checkpoint.
-- Extraction steps: table rows, list/card items, pagination, field selectors, transforms.
-- Output format: JSON, CSV, or both.
+- Browser profile and human-in-loop policy.
+- Ordered setup actions: `navigate`, `fill`, `select`, `click`, `scroll`, `wait`, checkpoints.
+- Capture shape: table rows or repeated list/card records.
+- Field selectors, attributes, required flags, and transforms.
+- Optional bounded pagination with `maxPages`.
+- Output format and directory.
 
 Input variables use this pattern:
 
@@ -79,83 +75,78 @@ Input variables use this pattern:
 "value": "{{input:lastName|Last name, or blank for all}}"
 ```
 
-When the config runs, the CLI prompts for those values and substitutes them into fill/select/navigate
-steps.
+When a workflow runs, the CLI prompts for those values and substitutes them into navigate, fill, and
+select steps.
 
-## Common Web Extraction Patterns
+## Create Extraction Workflow
 
-For a repeatable web extraction workflow, expect one or more of these page types:
+The authoring overlay follows four steps:
 
-- Search forms with keywords, category filters, status filters, location fields, or hidden CSRF
-  fields.
-- Results tables with server-side pagination.
-- Repeated list/card layouts where each record links to a detail page.
-- Infinite scroll or "load more" result pages.
-- CSV, Excel, JSON, or API exports that may be more complete than the DOM.
-- CAPTCHA, terms-of-use, login, or session-timeout screens requiring a human checkpoint.
+1. Navigate: open the start URL and record bounded setup actions such as search/filter inputs.
+2. Capture: choose a repeated record/table shape and the fields to extract.
+3. Loop: optionally select a Next/load-more control with a bounded `maxPages`.
+4. Verify: run preview, inspect diagnostics/JSON, then save.
 
-The interactive authoring flow lets you navigate manually, solve challenges, run page analysis,
-highlight candidate data regions, and save the detected pattern as a JSON config. The template at
-`configs/sites/web-extraction-template.json` shows the intended shape for a generic search-results
-workflow.
+Preview is required before saving unless the operator explicitly chooses `Save without preview` from
+Diagnostics. Selector repair controls show the primary selector plus alternates, with current-page
+match counts. Recorded actions can be reordered, deleted, marked optional, edited for fill/select
+values, or followed by inserted wait/checkpoint steps.
 
-The overlay authoring flow builds the React 19 + Tailwind 4 app in `apps/overlay`, injects it into
-the current Playwright page, and mounts a Shadow DOM UI over the target website. Use it to select a
-repeated item or table row, capture relative fields, choose a pagination control, preview rows from
-the current page, inspect the generated config JSON, and save a validated config. The CLI still owns
-filesystem writes and validation; the overlay only sends draft state through a Playwright binding.
-The same browser context also starts an rrweb authoring recording, so the overlay can show live event
-counts and the saved config can point back to the recording that produced it.
+After saving, the CLI can run a smoke extraction immediately and prints row/page counts plus JSON/CSV
+artifact paths.
 
-The overlay is organized like a compact editor: the floating toolbar opens Capture, Record, and
-Output popover palettes, while the side panel keeps shape, action, field, preview, JSON, and
-diagnostic views separated. Fields and recorded actions use DnD Kit drag handles so authors can
-reorder the generated extraction shape and recorded action flow before saving the config.
-An expandable layers timeline keeps the selected repeated shape, fields, recorded actions,
-pagination, preview, and generated JSON in one ordered authoring stack. The JSON panel includes both
-a generated config preview and a draft editor so advanced selector changes can be applied before the
-CLI validates and writes the final config.
-The detail panel can be closed from its header, reopened from the toolbar, dragged with its header
-handle, and resized from the lower-right grip so it can stay out of the target page's way.
-Panel content is split into reusable collapsible inspector sections. The layers section groups
-structure, fields, recorded actions, and outputs, with explicit ready/todo/view status badges so the
-green check state is clear instead of looking like a checkbox.
-The overlay also provides a four-step definition flow inspired by visual agent-feedback tools:
-Navigate, Capture, Loop, and Verify. The Guide tab turns the current draft into copyable markdown
-that tells another agent how to reproduce the browser workflow, which selectors to trust, when to
-paginate, and what to verify before running extraction.
-The scenario playbook optimizes those steps around common authoring cases: direct current-page
-capture, search/filter setup before capture, bounded pagination loops, and agent handoff.
+## Run Extraction Workflow
 
-Use the Actions mode in the floating toolbar to record a bounded interaction flow directly on the
-site. The overlay captures clicks, fills, selects, scroll position, pointer movement counts, and
-DOM/network activity during the segment. Stopping the segment appends those actions to the draft; a
-next/load-more click is also suggested as pagination.
+`Run extraction workflow` lists valid configs from `configs/sites/`, prompts for any configured
+input variables, runs the bounded workflow in headed Chrome, and writes output to `exports/`.
 
-In item selection mode, the overlay also preselects likely data shapes as the mouse moves. It
-highlights the suggested repeated records, scores the selector, generates starter fields, and shows a
-floating acceptance panel to accept the suggestion before saving or editing the draft.
+Human checkpoints and detected challenges pause for permitted operator action. Do not bypass CAPTCHA,
+terms screens, authentication, paywalls, rate limits, or access controls.
 
-Do not bypass access controls, paywalls, authentication, rate limits, anti-bot checks, or terms
-screens. Use the human-in-loop pauses for allowed manual actions, and verify that each target site's
-terms permit automated collection.
+## Browser Flows
+
+Browser flows are QA/debug artifacts saved separately from extraction configs:
+
+```text
+flows/<flow-id>.json
+flows/runs/<flow-id>-<timestamp>.json
+flows/artifacts/<flow-id>-<step-id>-<timestamp>.png
+```
+
+They use the `web-seek.browser-flow.v1` schema and support headed replay with an on-page controller:
+run all, step next, pause/resume, restart, skip, stop, and keep browser open. Browser-flow captures
+are step-level text/region/assertion results, not structured extraction rows.
+
+## Safety Posture
+
+Use Web Seek for authorized, bounded workflows. Do not use it to defeat CAPTCHA, access controls,
+paywalls, authentication, rate limits, terms screens, browser identity checks, or hidden background
+collection. Prefer official exports or public APIs when they provide the same data.
+
+Manual checkpoints are explicit, replay is headed by default, pagination is bounded, and browser-flow
+origin changes are constrained by saved allowed origins.
 
 ## Development
 
 ```bash
 bun run check
+bun test apps/overlay/src/config-preview.test.ts
 bun run format
 ```
 
 Project layout:
 
 ```text
-apps/cli/src/cli.ts          interactive menu
-apps/cli/src/recorder.ts     rrweb recording
-apps/cli/src/replayer.ts     rrweb-player replay HTML
-apps/cli/src/extractor.ts    config runner
-apps/cli/src/config-author.ts browser-assisted config authoring
-apps/cli/src/overlay-author.ts overlay injection and save bridge
-apps/overlay                 React overlay authoring app
-libs/data-engine/src         shared schemas, stores, CSV/JSON utilities
+apps/cli/src/cli.ts                  interactive menu
+apps/cli/src/overlay-author.ts       extraction workflow overlay bridge
+apps/cli/src/extractor.ts            extraction config runner
+apps/cli/src/browser-flow-author.ts  browser-flow debug authoring
+apps/cli/src/browser-flow-replay.ts  browser-flow replay controller orchestration
+apps/overlay                         React extraction authoring overlay
+libs/data-engine/src/schemas.ts      shared schemas
+libs/data-engine/src/*-store.ts      Bun-native local storage helpers
+configs/sites/                       extraction workflow configs
+exports/                             extraction output
+flows/                               browser-flow debug artifacts
+recordings/                          legacy rrweb recordings
 ```

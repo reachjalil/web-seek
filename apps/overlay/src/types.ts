@@ -41,7 +41,7 @@ export interface PaginationDraft {
   selectorMeta?: SelectorMeta;
 }
 
-export type DraftActionKind = "click" | "fill" | "select" | "scroll";
+export type DraftActionKind = "click" | "fill" | "select" | "scroll" | "wait" | "checkpoint";
 
 export interface DraftAction {
   id: string;
@@ -50,6 +50,10 @@ export interface DraftAction {
   value?: string;
   x?: number;
   y?: number;
+  durationMs?: number;
+  reason?: string;
+  optional?: boolean;
+  recordedAfterCapture?: boolean;
   label?: string;
   selectorMeta?: SelectorMeta;
   observedMutations: number;
@@ -74,6 +78,7 @@ export interface OverlayDraft {
   actions: DraftAction[];
   pagination?: PaginationDraft;
   lastPreviewRowCount?: number;
+  previewWaived?: boolean;
   notes?: string;
 }
 

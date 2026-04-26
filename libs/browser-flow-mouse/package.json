@@ -1,0 +1,12 @@
+{
+  "name": "@web-seek/browser-flow-mouse",
+  "version": "0.0.0",
+  "private": true,
+  "main": "index.ts",
+  "types": "index.ts",
+  "dependencies": {
+    "@web-seek/browser-flow-input": "workspace:*",
+    "@web-seek/data-engine": "workspace:*",
+    "playwright": "^1.59.1"
+  }
+}

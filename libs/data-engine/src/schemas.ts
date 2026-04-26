@@ -106,6 +106,287 @@ export const browserProfileSchema = z.object({
 
 export type BrowserProfile = z.infer<typeof browserProfileSchema>;
 
+export const browserFlowPolicySchema = z.object({
+  requiresAuthorization: z.literal(true).default(true),
+  noBypass: z.literal(true).default(true),
+  allowHeadlessReplay: z.literal(false).default(false),
+  allowCredentialCapture: z.literal(false).default(false),
+  allowNetworkPayloadCapture: z.literal(false).default(false),
+});
+
+export type BrowserFlowPolicy = z.infer<typeof browserFlowPolicySchema>;
+
+export const browserFlowLimitsSchema = z.object({
+  maxSteps: z.number().int().positive().default(200),
+  maxDurationMs: z
+    .number()
+    .int()
+    .positive()
+    .default(30 * 60 * 1000),
+  maxReplaySpeed: z.number().positive().max(4).default(1),
+  stepTimeoutMs: z.number().int().positive().default(15_000),
+});
+
+export type BrowserFlowLimits = z.infer<typeof browserFlowLimitsSchema>;
+
+export const browserFlowViewportSchema = z.object({
+  width: z.number().int().positive(),
+  height: z.number().int().positive(),
+});
+
+export type BrowserFlowViewport = z.infer<typeof browserFlowViewportSchema>;
+
+export const browserFlowTargetRectSchema = z.object({
+  x: z.number(),
+  y: z.number(),
+  width: z.number().nonnegative(),
+  height: z.number().nonnegative(),
+});
+
+export type BrowserFlowTargetRect = z.infer<typeof browserFlowTargetRectSchema>;
+
+const browserFlowStepBaseSchema = z.object({
+  id: z.string().min(1),
+  label: z.string().optional(),
+  timestamp: z.string().optional(),
+  optional: z.boolean().default(false),
+});
+
+export const browserFlowNavigateStepSchema = browserFlowStepBaseSchema.extend({
+  type: z.literal("navigate"),
+  url: z.string().url(),
+  waitUntil: z.enum(["load", "domcontentloaded", "networkidle"]).default("domcontentloaded"),
+});
+
+export const browserFlowClickStepSchema = browserFlowStepBaseSchema.extend({
+  type: z.literal("click"),
+  selector: z.string().min(1),
+  targetRect: browserFlowTargetRectSchema.optional(),
+  viewport: browserFlowViewportSchema.optional(),
+  urlBefore: z.string().url().optional(),
+  urlAfter: z.string().url().optional(),
+  timeoutMs: z.number().int().positive().optional(),
+});
+
+export const browserFlowFillStepSchema = browserFlowStepBaseSchema.extend({
+  type: z.literal("fill"),
+  selector: z.string().min(1),
+  value: z.string(),
+  inputType: z.string().optional(),
+  targetRect: browserFlowTargetRectSchema.optional(),
+  timeoutMs: z.number().int().positive().optional(),
+});
+
+export const browserFlowSelectStepSchema = browserFlowStepBaseSchema.extend({
+  type: z.literal("select"),
+  selector: z.string().min(1),
+  value: z.string(),
+  inputType: z.string().optional(),
+  targetRect: browserFlowTargetRectSchema.optional(),
+  timeoutMs: z.number().int().positive().optional(),
+});
+
+export const browserFlowKeyboardEventSchema = z.object({
+  key: z.string().min(1),
+  code: z.string().optional(),
+  text: z.string().optional(),
+  modifiers: z.array(z.enum(["Alt", "Control", "Meta", "Shift"])).default([]),
+  relativeTimeMs: z.number().int().nonnegative().optional(),
+});
+
+export type BrowserFlowKeyboardEvent = z.infer<typeof browserFlowKeyboardEventSchema>;
+
+export const browserFlowKeyboardStepSchema = browserFlowStepBaseSchema.extend({
+  type: z.literal("keyboard"),
+  keySequence: z.array(browserFlowKeyboardEventSchema).min(1),
+  focusedSelector: z.string().min(1).optional(),
+  targetRect: browserFlowTargetRectSchema.optional(),
+});
+
+export const browserFlowScrollStepSchema = browserFlowStepBaseSchema.extend({
+  type: z.literal("scroll"),
+  x: z.number().default(0),
+  y: z.number().default(0),
+  scrollContainer: z.string().min(1).optional(),
+  viewport: browserFlowViewportSchema.optional(),
+  waitAfterMs: z.number().int().nonnegative().default(250),
+});
+
+export const browserFlowPointerPointSchema = z.object({
+  x: z.number().min(0).max(1),
+  y: z.number().min(0).max(1),
+  relativeTimeMs: z.number().int().nonnegative(),
+});
+
+export type BrowserFlowPointerPoint = z.infer<typeof browserFlowPointerPointSchema>;
+
+export const browserFlowPointerTraceStepSchema = browserFlowStepBaseSchema.extend({
+  type: z.literal("pointer-trace"),
+  startTargetSelector: z.string().min(1).optional(),
+  endTargetSelector: z.string().min(1).optional(),
+  viewport: browserFlowViewportSchema,
+  points: z.array(browserFlowPointerPointSchema).min(1),
+  keyboardEvents: z.array(browserFlowKeyboardEventSchema).default([]),
+  lastPointerLocation: z
+    .object({
+      x: z.number().min(0).max(1),
+      y: z.number().min(0).max(1),
+    })
+    .optional(),
+});
+
+export const browserFlowWaitStepSchema = browserFlowStepBaseSchema.extend({
+  type: z.literal("wait"),
+  durationMs: z.number().int().nonnegative().default(1000),
+  reason: z.string().optional(),
+});
+
+export const browserFlowCheckpointStepSchema = browserFlowStepBaseSchema.extend({
+  type: z.literal("checkpoint"),
+  label: z.string().min(1),
+  instruction: z.string().min(1),
+  screenshot: z.string().optional(),
+});
+
+export const browserFlowCaptureTextStepSchema = browserFlowStepBaseSchema.extend({
+  type: z.literal("capture-text"),
+  selector: z.string().min(1),
+  attribute: z
+    .enum(["text", "html", "value", "href", "src", "aria-label", "title"])
+    .default("text"),
+  sampleValue: z.string().optional(),
+  assertionMode: z.enum(["none", "contains", "equals", "matches"]).default("none"),
+});
+
+export const browserFlowCaptureRegionStepSchema = browserFlowStepBaseSchema.extend({
+  type: z.literal("capture-region"),
+  selector: z.string().min(1).optional(),
+  targetRect: browserFlowTargetRectSchema.optional(),
+  screenshot: z.string().optional(),
+  assertionMode: z.enum(["none", "visual-review"]).default("visual-review"),
+});
+
+export const browserFlowAssertTextStepSchema = browserFlowStepBaseSchema.extend({
+  type: z.literal("assert-text"),
+  selector: z.string().min(1),
+  expectedText: z.string(),
+  mode: z.enum(["contains", "equals", "matches"]).default("contains"),
+  timeoutMs: z.number().int().positive().optional(),
+});
+
+export const browserFlowStepSchema = z.discriminatedUnion("type", [
+  browserFlowNavigateStepSchema,
+  browserFlowClickStepSchema,
+  browserFlowFillStepSchema,
+  browserFlowSelectStepSchema,
+  browserFlowKeyboardStepSchema,
+  browserFlowScrollStepSchema,
+  browserFlowPointerTraceStepSchema,
+  browserFlowWaitStepSchema,
+  browserFlowCheckpointStepSchema,
+  browserFlowCaptureTextStepSchema,
+  browserFlowCaptureRegionStepSchema,
+  browserFlowAssertTextStepSchema,
+]);
+
+export type BrowserFlowStep = z.infer<typeof browserFlowStepSchema>;
+export type BrowserFlowPointerTraceStep = z.infer<typeof browserFlowPointerTraceStepSchema>;
+
+export const browserFlowArtifactsSchema = z
+  .object({
+    screenshots: z.array(z.string()).default([]),
+    captures: z.array(z.string()).default([]),
+    replayLogs: z.array(z.string()).default([]),
+  })
+  .default({ screenshots: [], captures: [], replayLogs: [] });
+
+export type BrowserFlowArtifacts = z.infer<typeof browserFlowArtifactsSchema>;
+
+export const browserFlowAuditSchema = z
+  .object({
+    createdBy: z.string().optional(),
+    createdWith: z.literal("web-seek-cli").default("web-seek-cli"),
+    authorizationNote: z.string().default("Authorized QA workflow"),
+    lastSavedAt: z.string().optional(),
+  })
+  .default({ createdWith: "web-seek-cli", authorizationNote: "Authorized QA workflow" });
+
+export type BrowserFlowAudit = z.infer<typeof browserFlowAuditSchema>;
+
+export const browserFlowSchema = z.object({
+  schema: z.literal("web-seek.browser-flow.v1"),
+  id: z.string().min(1),
+  name: z.string().min(1),
+  startUrl: z.string().url(),
+  allowedOrigins: z.array(z.string().url()).min(1),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+  browser: browserProfileSchema.default({
+    headless: false,
+    viewport: { width: 1440, height: 1000 },
+    slowMoMs: 0,
+  }),
+  policy: browserFlowPolicySchema.default({
+    requiresAuthorization: true,
+    noBypass: true,
+    allowHeadlessReplay: false,
+    allowCredentialCapture: false,
+    allowNetworkPayloadCapture: false,
+  }),
+  limits: browserFlowLimitsSchema.default({
+    maxSteps: 200,
+    maxDurationMs: 30 * 60 * 1000,
+    maxReplaySpeed: 1,
+    stepTimeoutMs: 15_000,
+  }),
+  steps: z.array(browserFlowStepSchema).default([]),
+  artifacts: browserFlowArtifactsSchema,
+  audit: browserFlowAuditSchema,
+});
+
+export type BrowserFlow = z.infer<typeof browserFlowSchema>;
+
+export const browserFlowReplayLogSchema = z.object({
+  stepId: z.string().optional(),
+  stepType: z.string().optional(),
+  status: z.enum(["pass", "fail", "warn", "info"]),
+  message: z.string(),
+  timestamp: z.string(),
+});
+
+export type BrowserFlowReplayLog = z.infer<typeof browserFlowReplayLogSchema>;
+
+export const browserFlowCaptureResultSchema = z.object({
+  stepId: z.string(),
+  stepType: z.enum(["capture-text", "capture-region", "assert-text"]),
+  selector: z.string().optional(),
+  attribute: z.string().optional(),
+  value: z.string().optional(),
+  screenshot: z.string().optional(),
+  assertionMode: z.string().optional(),
+  passed: z.boolean().optional(),
+  capturedAt: z.string(),
+});
+
+export type BrowserFlowCaptureResult = z.infer<typeof browserFlowCaptureResultSchema>;
+
+export const browserFlowReplayResultSchema = z.object({
+  schema: z.literal("web-seek.browser-flow-replay.v1"),
+  id: z.string().min(1),
+  flowId: z.string().min(1),
+  flowName: z.string().min(1),
+  startedAt: z.string(),
+  stoppedAt: z.string(),
+  status: z.enum(["passed", "failed", "stopped"]),
+  startUrl: z.string().url(),
+  finalUrl: z.string(),
+  allowedOrigins: z.array(z.string().url()),
+  captures: z.array(browserFlowCaptureResultSchema).default([]),
+  logs: z.array(browserFlowReplayLogSchema).default([]),
+});
+
+export type BrowserFlowReplayResult = z.infer<typeof browserFlowReplayResultSchema>;
+
 export const humanInLoopSchema = z.object({
   enabled: z.boolean().default(true),
   pauseBeforeRun: z.boolean().default(false),
@@ -143,6 +424,12 @@ export const waitForSelectorStepSchema = stepBaseSchema.extend({
   type: z.literal("wait-for-selector"),
   selector: z.string().min(1),
   timeoutMs: z.number().int().positive().default(15_000),
+});
+
+export const waitStepSchema = stepBaseSchema.extend({
+  type: z.literal("wait"),
+  durationMs: z.number().int().nonnegative().default(1000),
+  reason: z.string().optional(),
 });
 
 export const clickStepSchema = stepBaseSchema.extend({
@@ -211,6 +498,7 @@ export const downloadStepSchema = stepBaseSchema.extend({
 export const extractionStepSchema = z.discriminatedUnion("type", [
   navigateStepSchema,
   waitForSelectorStepSchema,
+  waitStepSchema,
   clickStepSchema,
   fillStepSchema,
   selectStepSchema,

@@ -1,0 +1,10 @@
+{
+  "name": "@web-seek/browser-flow-replay-state",
+  "version": "0.0.0",
+  "private": true,
+  "main": "index.ts",
+  "types": "index.ts",
+  "dependencies": {
+    "@web-seek/data-engine": "workspace:*"
+  }
+}

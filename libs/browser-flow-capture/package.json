@@ -1,0 +1,11 @@
+{
+  "name": "@web-seek/browser-flow-capture",
+  "version": "0.0.0",
+  "private": true,
+  "main": "index.ts",
+  "types": "index.ts",
+  "dependencies": {
+    "@web-seek/data-engine": "workspace:*",
+    "playwright": "^1.59.1"
+  }
+}

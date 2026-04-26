@@ -61,7 +61,7 @@ function normalizeActionSteps(actions: DraftAction[]) {
       const base = {
         id: `action-${index + 1}-${action.type}`,
         label: action.label,
-        optional: false,
+        optional: action.optional ?? false,
       };
 
       if (action.type === "click" && action.selector) {
@@ -95,26 +95,73 @@ function normalizeActionSteps(actions: DraftAction[]) {
           waitAfterMs: 500,
         };
       }
+      if (action.type === "wait") {
+        return {
+          ...base,
+          type: "wait",
+          durationMs: Math.max(0, Math.round(action.durationMs ?? 1000)),
+          reason: action.reason,
+        };
+      }
+      if (action.type === "checkpoint") {
+        return {
+          ...base,
+          type: "human-checkpoint",
+          reason: action.reason || action.label || "Confirm the browser is ready to continue.",
+        };
+      }
 
       return undefined;
     })
     .filter(Boolean);
 }
 
-export function draftIssues(draft: OverlayDraft): DraftIssue[] {
+export interface DraftIssueContext {
+  previewRows?: Record<string, string>[];
+}
+
+export function draftIssues(draft: OverlayDraft, context: DraftIssueContext = {}): DraftIssue[] {
   const issues: DraftIssue[] = [];
+  const previewWasRun = draft.lastPreviewRowCount !== undefined;
+  const previewRows = context.previewRows ?? [];
 
   if (!draft.itemSelector) {
-    issues.push({ id: "item", label: "No repeated data shape selected", severity: "error" });
+    issues.push({
+      id: "item",
+      label: "No repeated records/table shape selected",
+      severity: "error",
+    });
   }
   if (draft.fields.length === 0) {
     issues.push({ id: "fields", label: "No fields selected", severity: "error" });
   }
-  if (draft.actions.some((action) => action.type !== "scroll" && !action.selector)) {
+  if (
+    draft.actions.some(
+      (action) =>
+        action.type !== "scroll" &&
+        action.type !== "wait" &&
+        action.type !== "checkpoint" &&
+        !action.selector,
+    )
+  ) {
     issues.push({
       id: "action-selector",
       label: "An action is missing a selector",
       severity: "error",
+    });
+  }
+  if (!previewWasRun && !draft.previewWaived) {
+    issues.push({
+      id: "preview-required",
+      label: "Run preview before saving, or explicitly save without preview",
+      severity: "error",
+    });
+  }
+  if (previewWasRun && (draft.lastPreviewRowCount ?? 0) === 0) {
+    issues.push({
+      id: "zero-preview",
+      label: "Last preview produced zero rows",
+      severity: "warning",
     });
   }
   if (draft.fields.some((field) => !field.name.trim())) {
@@ -134,15 +181,43 @@ export function draftIssues(draft: OverlayDraft): DraftIssue[] {
       severity: "warning",
     });
   }
+  const emptyRequiredFields = draft.fields.filter(
+    (field) =>
+      field.required &&
+      previewRows.length > 0 &&
+      previewRows.every((row) => !String(row[field.name] ?? "").trim()),
+  );
+  if (emptyRequiredFields.length > 0) {
+    issues.push({
+      id: "required-fields-empty",
+      label: `Required field(s) empty in preview: ${emptyRequiredFields
+        .map((field) => field.name)
+        .join(", ")}`,
+      severity: "warning",
+    });
+  }
+  if (draft.actions.some((action) => action.recordedAfterCapture)) {
+    issues.push({
+      id: "late-actions",
+      label: "An action was recorded after capture setup but will run before extraction",
+      severity: "warning",
+    });
+  }
   if (!draft.pagination) {
     issues.push({ id: "pagination", label: "Pagination is not configured", severity: "warning" });
+  } else if (previewWasRun) {
+    issues.push({
+      id: "pagination-current-page-preview",
+      label: "Preview only checks the current page; extraction will use bounded pagination",
+      severity: "warning",
+    });
   }
 
   return issues;
 }
 
-export function draftIsSavable(draft: OverlayDraft): boolean {
-  return draftIssues(draft).every((issue) => issue.severity !== "error");
+export function draftIsSavable(draft: OverlayDraft, context: DraftIssueContext = {}): boolean {
+  return draftIssues(draft, context).every((issue) => issue.severity !== "error");
 }
 
 export function buildGeneratedConfigPreview(

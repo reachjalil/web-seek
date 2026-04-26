@@ -101,7 +101,14 @@ const SELECTOR_STRATEGIES = new Set<SelectorStrategy>([
   "structural",
   "nth-of-type",
 ]);
-const ACTION_TYPES = new Set<DraftAction["type"]>(["click", "fill", "select", "scroll"]);
+const ACTION_TYPES = new Set<DraftAction["type"]>([
+  "click",
+  "fill",
+  "select",
+  "scroll",
+  "wait",
+  "checkpoint",
+]);
 
 type PanelTab = "shape" | "actions" | "fields" | "preview" | "json" | "guide" | "diagnostics";
 type ToolPalette = "capture" | "record" | "output";
@@ -241,7 +248,21 @@ function actionStepText(action: DraftAction): string {
   if (action.type === "scroll") {
     return `scroll x:${action.x ?? 0} y:${action.y ?? 0}`;
   }
+  if (action.type === "wait") {
+    return `wait ${action.durationMs ?? 1000}ms`;
+  }
+  if (action.type === "checkpoint") {
+    return `checkpoint ${action.reason ?? action.label ?? ""}`.trim();
+  }
   return `${action.type} ${action.selector ?? ""}`;
+}
+
+function selectorMatchCount(selector: string): number {
+  try {
+    return document.querySelectorAll(selector).length;
+  } catch {
+    return 0;
+  }
 }
 
 function confidenceLabel(value: number | undefined): string {
@@ -266,7 +287,7 @@ function inferredScenarioLabel(draft: OverlayDraft, previewCount: number): strin
 
 function suggestedNextStep(draft: OverlayDraft, previewCount: number): string {
   if (draft.actions.length === 0 && !draft.itemSelector) {
-    return "If the page needs search/filtering, record navigation actions first; otherwise select the repeated data shape.";
+    return "If the page needs search/filtering, record navigation actions first; otherwise select the repeated records/table shape.";
   }
   if (!draft.itemSelector) {
     return "Select one repeated row, card, or table record.";
@@ -350,7 +371,7 @@ function buildAgentGuideMarkdown(
 
   lines.push("", "## Agent Notes");
   lines.push(
-    "- Navigate first, then capture the repeated data shape, then fields, then configure loop/pagination only when needed.",
+    "- Navigate first, then capture the repeated records/table shape, then fields, then configure loop/pagination only when needed.",
   );
   lines.push(
     "- Use selectors as hypotheses; verify visible row counts against the page before a full run.",
@@ -450,6 +471,10 @@ function normalizeDraftAction(value: unknown, index: number): DraftAction | unde
     value: optionalString(record.value),
     x: typeof record.x === "number" ? record.x : undefined,
     y: typeof record.y === "number" ? record.y : undefined,
+    durationMs: typeof record.durationMs === "number" ? record.durationMs : undefined,
+    reason: optionalString(record.reason),
+    optional: booleanValue(record.optional, false),
+    recordedAfterCapture: booleanValue(record.recordedAfterCapture, false),
     label: optionalString(record.label),
     selectorMeta: normalizeSelectorMeta(record.selectorMeta),
     observedMutations: numberValue(record.observedMutations, 0),
@@ -508,6 +533,7 @@ function normalizeDraftFromJson(value: unknown, previous: OverlayDraft): Overlay
     pagination: normalizePagination(record.pagination),
     lastPreviewRowCount:
       typeof record.lastPreviewRowCount === "number" ? record.lastPreviewRowCount : undefined,
+    previewWaived: booleanValue(record.previewWaived, false),
     notes: optionalString(record.notes),
   };
 }
@@ -577,19 +603,33 @@ function toolbarClass(active: boolean): string {
 function IconButton({
   active,
   label,
+  tooltip,
   onClick,
   children,
 }: {
   active?: boolean;
   label: string;
+  tooltip?: string;
   onClick: () => void;
   children: React.ReactNode;
 }) {
+  const hint = tooltip ?? label;
   return (
-    <button type="button" onClick={onClick} title={label} className={toolbarClass(Boolean(active))}>
-      {children}
-      <span className="max-w-20 truncate">{label}</span>
-    </button>
+    <span className="group relative inline-flex">
+      <button
+        type="button"
+        onClick={onClick}
+        title={hint}
+        aria-label={hint}
+        className={toolbarClass(Boolean(active))}
+      >
+        {children}
+        <span className="max-w-20 truncate">{label}</span>
+      </button>
+      <span className="pointer-events-none absolute left-1/2 top-[calc(100%+6px)] z-[2147483647] hidden w-max max-w-64 -translate-x-1/2 rounded-[3px] border border-slate-950/20 bg-slate-950 px-2 py-1 text-[11px] font-semibold leading-4 text-white shadow-lg group-hover:block">
+        {hint}
+      </span>
+    </span>
   );
 }
 
@@ -864,6 +904,8 @@ function ToolPalettePopover({
           <>
             <button
               type="button"
+              title="Find repeated records or a table on the current page."
+              aria-label="Find repeated records or a table on the current page"
               className={itemClass}
               onClick={() => {
                 onMode("item");
@@ -872,10 +914,12 @@ function ToolPalettePopover({
               }}
             >
               <Sparkles size={16} />
-              Smart data shape
+              Repeated records
             </button>
             <button
               type="button"
+              title="Select a field inside the repeated record to include in each output row."
+              aria-label="Add a field selector to the extraction workflow"
               className={itemClass}
               onClick={() => {
                 onMode("field");
@@ -888,6 +932,8 @@ function ToolPalettePopover({
             </button>
             <button
               type="button"
+              title="Select the Next or load-more control for bounded pagination."
+              aria-label="Pick a bounded pagination control"
               className={itemClass}
               onClick={() => {
                 onMode("pagination");
@@ -905,6 +951,8 @@ function ToolPalettePopover({
           <>
             <button
               type="button"
+              title="Record setup actions such as search fields, filter controls, clicks, and scrolling."
+              aria-label="Start or stop setup action recording"
               className={itemClass}
               onClick={() => {
                 recording ? onStopRecording() : onStartRecording();
@@ -916,6 +964,8 @@ function ToolPalettePopover({
             </button>
             <button
               type="button"
+              title="Open the ordered action list to edit, reorder, or delete setup actions."
+              aria-label="Open recorded action layers"
               className={itemClass}
               onClick={() => {
                 onTab("actions");
@@ -932,6 +982,8 @@ function ToolPalettePopover({
           <>
             <button
               type="button"
+              title="Extract rows from the current page with the draft selectors."
+              aria-label="Run current-page preview"
               className={itemClass}
               onClick={() => {
                 onPreview();
@@ -943,6 +995,8 @@ function ToolPalettePopover({
             </button>
             <button
               type="button"
+              title="Inspect the generated site config JSON and edit the overlay draft."
+              aria-label="Inspect generated JSON"
               className={itemClass}
               onClick={() => {
                 onTab("json");
@@ -954,6 +1008,8 @@ function ToolPalettePopover({
             </button>
             <button
               type="button"
+              title="Open a step-by-step handoff guide for this workflow."
+              aria-label="Open workflow guide"
               className={itemClass}
               onClick={() => {
                 onTab("guide");
@@ -965,6 +1021,8 @@ function ToolPalettePopover({
             </button>
             <button
               type="button"
+              title="Validate and save the extraction workflow config."
+              aria-label="Save extraction workflow config"
               className={itemClass}
               onClick={() => {
                 onSave();
@@ -1167,6 +1225,8 @@ function WorkflowRail({
         <button
           key={step.id}
           type="button"
+          title={`Open ${step.label}: ${step.done ? "configured" : "needs attention"}.`}
+          aria-label={`Open ${step.label} step`}
           onClick={step.action}
           className={[
             "flex min-w-0 items-center gap-2 rounded-md border px-2 py-2 text-left text-xs transition",
@@ -1324,6 +1384,8 @@ function TimelineLayerItem({
   return (
     <button
       type="button"
+      title={`${label}: ${meta}. ${intent.status}`}
+      aria-label={`${label}: ${meta}. ${intent.status}`}
       onClick={() => onSelect(intent)}
       className={[
         "flex w-full items-center gap-2 rounded-[3px] border px-2 py-1.5 text-left transition",
@@ -1396,6 +1458,8 @@ function DefinitionFlowCard({
   return (
     <button
       type="button"
+      title={`${label}: ${description}`}
+      aria-label={`${label}: ${description}`}
       onClick={onClick}
       className={[
         "flex min-w-0 items-start gap-2 rounded-[3px] border px-2 py-2 text-left",
@@ -1500,6 +1564,8 @@ function ScenarioCard({
   return (
     <button
       type="button"
+      title={`${label}: ${description}`}
+      aria-label={`${label}: ${description}`}
       onClick={onClick}
       className={[
         "flex min-w-0 flex-col gap-1 rounded-[3px] border px-2 py-2 text-left",
@@ -1764,7 +1830,60 @@ function Metric({
   );
 }
 
-function ShapePanel({ draft }: { draft: OverlayDraft }) {
+function SelectorRepairList({
+  selector,
+  alternates,
+  onSelect,
+}: {
+  selector?: string;
+  alternates?: string[];
+  onSelect: (selector: string) => void;
+}) {
+  const options = Array.from(
+    new Set([selector, ...(alternates ?? [])].filter(Boolean)),
+  ) as string[];
+  if (options.length === 0) {
+    return null;
+  }
+
+  return (
+    <details className="mt-2 rounded-md border border-slate-200 bg-white text-[11px] text-slate-600">
+      <summary className="cursor-pointer px-2 py-1.5 font-semibold text-slate-700">
+        Selector options
+      </summary>
+      <div className="space-y-1 border-t border-slate-100 p-2">
+        {options.map((option) => (
+          <button
+            key={option}
+            type="button"
+            title={`Use selector with ${selectorMatchCount(option)} current-page matches: ${option}`}
+            aria-label={`Use selector with ${selectorMatchCount(option)} current-page matches`}
+            onClick={() => onSelect(option)}
+            className={[
+              "flex w-full items-start gap-2 rounded-[3px] border px-2 py-1.5 text-left hover:border-slate-400",
+              option === selector ? "border-teal-300 bg-teal-50" : "border-slate-200 bg-slate-50",
+            ].join(" ")}
+          >
+            <span className="mt-0.5 shrink-0 rounded bg-white px-1.5 py-0.5 font-bold text-slate-500">
+              {selectorMatchCount(option)}
+            </span>
+            <span className="break-all font-mono text-[10px] leading-4 text-slate-700">
+              {option}
+            </span>
+          </button>
+        ))}
+      </div>
+    </details>
+  );
+}
+
+function ShapePanel({
+  draft,
+  onSelectorChange,
+}: {
+  draft: OverlayDraft;
+  onSelectorChange: (selector: string) => void;
+}) {
   return (
     <section className="space-y-3">
       <div>
@@ -1775,6 +1894,11 @@ function ShapePanel({ draft }: { draft: OverlayDraft }) {
         <div className="break-all rounded-md border border-slate-200 bg-white p-3 font-mono text-xs text-slate-700">
           {draft.itemSelector ?? "No shape selected"}
         </div>
+        <SelectorRepairList
+          selector={draft.itemSelector}
+          alternates={draft.itemSelectorMeta?.alternates}
+          onSelect={onSelectorChange}
+        />
       </div>
       {draft.itemSelectorMeta ? (
         <div className="rounded-md border border-slate-200 bg-white p-3">
@@ -1825,7 +1949,8 @@ function FieldEditor({
         </div>
         <button
           type="button"
-          title="Remove field"
+          title="Remove this field from the output rows."
+          aria-label="Remove field"
           onClick={onRemove}
           className="rounded-md border border-slate-200 p-1.5 text-slate-600 hover:border-red-300 hover:text-red-700"
         >
@@ -1884,18 +2009,11 @@ function FieldEditor({
       <div className="mt-2 break-all rounded-md bg-slate-50 px-2 py-1.5 font-mono text-[11px] text-slate-700">
         {field.selector}
       </div>
-      {field.selectorMeta?.alternates.length ? (
-        <details className="mt-2 text-[11px] text-slate-500">
-          <summary className="cursor-pointer font-semibold text-slate-600">Alternates</summary>
-          <div className="mt-1 space-y-1">
-            {field.selectorMeta.alternates.slice(0, 3).map((selector) => (
-              <div key={selector} className="break-all rounded bg-slate-50 px-2 py-1 font-mono">
-                {selector}
-              </div>
-            ))}
-          </div>
-        </details>
-      ) : null}
+      <SelectorRepairList
+        selector={field.selector}
+        alternates={field.selectorMeta?.alternates}
+        onSelect={(selector) => onChange({ ...field, selector })}
+      />
     </div>
   );
 }
@@ -1984,6 +2102,8 @@ function ActionsPanel({
   stats,
   onStart,
   onStop,
+  onChange,
+  onInsertAfter,
   onRemove,
   onReorder,
 }: {
@@ -1993,6 +2113,8 @@ function ActionsPanel({
   stats: ActionStats | undefined;
   onStart: () => void;
   onStop: () => void;
+  onChange: (action: DraftAction) => void;
+  onInsertAfter: (id: string, type: "wait" | "checkpoint") => void;
   onRemove: (id: string) => void;
   onReorder: (event: DragEndEvent) => void;
 }) {
@@ -2053,6 +2175,8 @@ function ActionsPanel({
                 <SortableActionCard
                   key={action.id}
                   action={action}
+                  onChange={onChange}
+                  onInsertAfter={onInsertAfter}
                   onRemove={() => onRemove(action.id)}
                 />
               ))}
@@ -2067,11 +2191,15 @@ function ActionsPanel({
 function ActionCard({
   action,
   recording,
+  onChange,
+  onInsertAfter,
   onRemove,
   dragHandle,
 }: {
   action: DraftAction;
   recording?: boolean;
+  onChange?: (action: DraftAction) => void;
+  onInsertAfter?: (id: string, type: "wait" | "checkpoint") => void;
   onRemove?: () => void;
   dragHandle?: React.ReactNode;
 }) {
@@ -2113,11 +2241,96 @@ function ActionCard({
         <span>{action.observedNetwork} network</span>
         <span>{action.pointerMoves} moves</span>
       </div>
+      {!recording && onChange ? (
+        <div className="mt-3 space-y-2 border-t border-slate-100 pt-2">
+          <label className="flex items-center gap-2 text-xs text-slate-600">
+            <input
+              type="checkbox"
+              checked={action.optional ?? false}
+              onChange={(event) => onChange({ ...action, optional: event.target.checked })}
+            />
+            optional
+          </label>
+          {action.selector ? (
+            <SelectorRepairList
+              selector={action.selector}
+              alternates={action.selectorMeta?.alternates}
+              onSelect={(selector) => onChange({ ...action, selector })}
+            />
+          ) : null}
+          {action.type === "fill" || action.type === "select" ? (
+            <label className="block text-xs text-slate-600">
+              Value
+              <input
+                value={action.value ?? ""}
+                onChange={(event) => onChange({ ...action, value: event.target.value })}
+                className="mt-1 w-full rounded-md border border-slate-300 px-2 py-1.5 text-xs"
+              />
+            </label>
+          ) : null}
+          {action.type === "wait" ? (
+            <label className="block text-xs text-slate-600">
+              Wait ms
+              <input
+                type="number"
+                min={0}
+                value={action.durationMs ?? 1000}
+                onChange={(event) =>
+                  onChange({ ...action, durationMs: Number(event.target.value) })
+                }
+                className="mt-1 w-full rounded-md border border-slate-300 px-2 py-1.5 text-xs"
+              />
+            </label>
+          ) : null}
+          {action.type === "wait" || action.type === "checkpoint" ? (
+            <label className="block text-xs text-slate-600">
+              Reason
+              <input
+                value={action.reason ?? ""}
+                onChange={(event) => onChange({ ...action, reason: event.target.value })}
+                className="mt-1 w-full rounded-md border border-slate-300 px-2 py-1.5 text-xs"
+              />
+            </label>
+          ) : null}
+          {onInsertAfter ? (
+            <div className="flex gap-2">
+              <button
+                type="button"
+                title="Insert a timed wait after this action."
+                aria-label="Insert wait after this action"
+                onClick={() => onInsertAfter(action.id, "wait")}
+                className="rounded-md border border-slate-200 bg-white px-2 py-1 text-xs font-semibold text-slate-700 hover:border-slate-400"
+              >
+                Insert wait
+              </button>
+              <button
+                type="button"
+                title="Insert a manual checkpoint after this action."
+                aria-label="Insert manual checkpoint after this action"
+                onClick={() => onInsertAfter(action.id, "checkpoint")}
+                className="rounded-md border border-slate-200 bg-white px-2 py-1 text-xs font-semibold text-slate-700 hover:border-slate-400"
+              >
+                Insert checkpoint
+              </button>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
     </div>
   );
 }
 
-function SortableActionCard({ action, onRemove }: { action: DraftAction; onRemove: () => void }) {
+function SortableActionCard({
+  action,
+  onChange,
+  onInsertAfter,
+  onRemove,
+}: {
+  action: DraftAction;
+  onChange: (action: DraftAction) => void;
+  onInsertAfter: (id: string, type: "wait" | "checkpoint") => void;
+  onRemove: () => void;
+}) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: action.id,
   });
@@ -2130,6 +2343,8 @@ function SortableActionCard({ action, onRemove }: { action: DraftAction; onRemov
     <div ref={setNodeRef} style={style} className={isDragging ? "opacity-70" : undefined}>
       <ActionCard
         action={action}
+        onChange={onChange}
+        onInsertAfter={onInsertAfter}
         onRemove={onRemove}
         dragHandle={<DragHandle attributes={attributes} listeners={listeners} />}
       />
@@ -2197,6 +2412,18 @@ function PaginationPanel({
           <div className="break-all rounded-md bg-slate-50 px-2 py-1.5 font-mono text-[11px]">
             {draft.pagination.nextSelector}
           </div>
+          <SelectorRepairList
+            selector={draft.pagination.nextSelector}
+            alternates={draft.pagination.selectorMeta?.alternates}
+            onSelect={(selector) =>
+              setDraft((current) => ({
+                ...current,
+                pagination: current.pagination
+                  ? { ...current.pagination, nextSelector: selector }
+                  : undefined,
+              }))
+            }
+          />
           <div className="grid grid-cols-2 gap-2">
             <label className="text-xs text-slate-600">
               Max pages
@@ -2340,6 +2567,8 @@ function JsonPanel({
           <div className="flex justify-end">
             <button
               type="button"
+              title="Copy the generated site config JSON to the clipboard."
+              aria-label="Copy generated site config JSON"
               onClick={onCopyGenerated}
               className="flex items-center gap-2 rounded-md border border-slate-200 bg-white px-2 py-1 text-xs font-semibold text-slate-700 hover:border-slate-400"
             >
@@ -2367,6 +2596,8 @@ function JsonPanel({
             <div className="flex gap-2">
               <button
                 type="button"
+                title="Copy the editable overlay draft JSON to the clipboard."
+                aria-label="Copy overlay draft JSON"
                 onClick={onCopyDraft}
                 className="flex items-center gap-2 rounded-md border border-slate-200 bg-white px-2 py-1 text-xs font-semibold text-slate-700 hover:border-slate-400"
               >
@@ -2375,6 +2606,8 @@ function JsonPanel({
               </button>
               <button
                 type="button"
+                title="Reset the draft editor to the current overlay state."
+                aria-label="Reset draft JSON editor"
                 onClick={onResetDraftJson}
                 className="rounded-md border border-slate-200 bg-white px-2 py-1 text-xs font-semibold text-slate-700 hover:border-slate-400"
               >
@@ -2382,6 +2615,8 @@ function JsonPanel({
               </button>
               <button
                 type="button"
+                title="Apply the edited draft JSON to the overlay."
+                aria-label="Apply edited draft JSON"
                 onClick={onApplyDraftJson}
                 className="rounded-md border border-signal bg-signal px-2 py-1 text-xs font-semibold text-white hover:bg-teal-700"
               >
@@ -2428,6 +2663,8 @@ function AgentGuidePanel({
           </div>
           <button
             type="button"
+            title="Copy the workflow handoff guide to the clipboard."
+            aria-label="Copy workflow handoff guide"
             onClick={onCopy}
             className="flex items-center gap-1.5 rounded-[3px] border border-slate-950/15 bg-white px-2 py-1 text-xs font-semibold text-slate-700 hover:border-slate-950/35"
           >
@@ -2444,8 +2681,16 @@ function AgentGuidePanel({
   );
 }
 
-function DiagnosticsPanel({ draft }: { draft: OverlayDraft }) {
-  const issues = draftIssues(draft);
+function DiagnosticsPanel({
+  draft,
+  previewRows,
+  onWaivePreview,
+}: {
+  draft: OverlayDraft;
+  previewRows: Record<string, string>[];
+  onWaivePreview: () => void;
+}) {
+  const issues = draftIssues(draft, { previewRows });
   return (
     <section className="space-y-2">
       <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Validation</div>
@@ -2467,6 +2712,17 @@ function DiagnosticsPanel({ draft }: { draft: OverlayDraft }) {
         >
           <CircleAlert size={16} />
           <span>{issue.label}</span>
+          {issue.id === "preview-required" ? (
+            <button
+              type="button"
+              title="Allow saving this workflow without a current-page preview."
+              aria-label="Save without running preview"
+              onClick={onWaivePreview}
+              className="ml-auto shrink-0 rounded-md border border-amber-300 bg-white px-2 py-1 text-xs font-bold text-amber-800 hover:border-amber-500"
+            >
+              Save without preview
+            </button>
+          ) : null}
         </div>
       ))}
     </section>
@@ -2525,7 +2781,7 @@ export function App({ host }: AppProps) {
     [draft, previewRows.length, recording],
   );
   const generatedJson = useDeferredValue(JSON.stringify(generatedConfig, null, 2));
-  const issues = useMemo(() => draftIssues(draft), [draft]);
+  const issues = useMemo(() => draftIssues(draft, { previewRows }), [draft, previewRows]);
   const agentGuide = useDeferredValue(
     buildAgentGuideMarkdown(draft, previewRows.length, recording, issues),
   );
@@ -2777,7 +3033,13 @@ export function App({ host }: AppProps) {
     const paginationAction = [...actions].reverse().find((action) => action.paginationHint);
     setDraft((current) => ({
       ...current,
-      actions: [...current.actions, ...actions],
+      actions: [
+        ...current.actions,
+        ...actions.map((action) => ({
+          ...action,
+          recordedAfterCapture: Boolean(current.itemSelector || current.fields.length > 0),
+        })),
+      ],
       pagination:
         !current.pagination && paginationAction?.selector
           ? {
@@ -2912,7 +3174,7 @@ export function App({ host }: AppProps) {
 
       if (mode === "item") {
         if (!isDataShapeCandidateTarget(element)) {
-          setStatus("Form controls are actions, not data shapes");
+          setStatus("Form controls are actions, not capture records");
           setMode("idle");
           return;
         }
@@ -2996,6 +3258,60 @@ export function App({ host }: AppProps) {
     }));
   };
 
+  const updateShapeSelector = (selector: string) => {
+    setDraft((current) => ({
+      ...current,
+      itemSelector: selector,
+    }));
+    setItemRects(rectsForSelector(selector));
+    setStatus(`Shape selector updated: ${selectorMatchCount(selector)} matches`);
+  };
+
+  const updateAction = (action: DraftAction) => {
+    setDraft((current) => ({
+      ...current,
+      actions: current.actions.map((item) => (item.id === action.id ? action : item)),
+    }));
+  };
+
+  const insertActionAfter = (id: string, type: "wait" | "checkpoint") => {
+    setDraft((current) => {
+      const index = current.actions.findIndex((action) => action.id === id);
+      if (index < 0) {
+        return current;
+      }
+      const inserted: DraftAction =
+        type === "wait"
+          ? {
+              id: `action-${Date.now()}-wait`,
+              type: "wait",
+              durationMs: 1000,
+              reason: "Wait for page update",
+              label: "Wait for page update",
+              observedMutations: 0,
+              observedNetwork: 0,
+              pointerMoves: 0,
+            }
+          : {
+              id: `action-${Date.now()}-checkpoint`,
+              type: "checkpoint",
+              reason: "Confirm the browser is ready to continue.",
+              label: "Manual checkpoint",
+              observedMutations: 0,
+              observedNetwork: 0,
+              pointerMoves: 0,
+            };
+      return {
+        ...current,
+        actions: [
+          ...current.actions.slice(0, index + 1),
+          inserted,
+          ...current.actions.slice(index + 1),
+        ],
+      };
+    });
+  };
+
   const removeField = (id: string) => {
     setDraft((current) => ({
       ...current,
@@ -3041,6 +3357,7 @@ export function App({ host }: AppProps) {
     setDraft((current) => ({
       ...current,
       lastPreviewRowCount: rows.length,
+      previewWaived: false,
       sourceUrl: location.href,
     }));
     setStatus(`${rows.length} rows in preview`);
@@ -3112,7 +3429,7 @@ export function App({ host }: AppProps) {
   };
 
   const saveConfig = async () => {
-    if (!draftIsSavable(draft)) {
+    if (!draftIsSavable(draft, { previewRows })) {
       setActiveTab("diagnostics");
       setActiveLayer("diagnostics");
       setDetailOpen(true);
@@ -3173,6 +3490,7 @@ export function App({ host }: AppProps) {
           <IconButton
             active={detailOpen}
             label="Panel"
+            tooltip="Show or hide the workflow editor panel."
             onClick={() => setDetailOpen((open) => !open)}
           >
             <Columns3 size={15} />
@@ -3180,6 +3498,7 @@ export function App({ host }: AppProps) {
           <IconButton
             active={openPalette === "capture"}
             label="Capture"
+            tooltip="Open tools for repeated records, fields, and bounded pagination."
             onClick={() => setOpenPalette(openPalette === "capture" ? undefined : "capture")}
           >
             <MoreHorizontal size={16} />
@@ -3187,6 +3506,7 @@ export function App({ host }: AppProps) {
           <IconButton
             active={openPalette === "record"}
             label="Record"
+            tooltip="Open tools for recording setup actions before extraction."
             onClick={() => setOpenPalette(openPalette === "record" ? undefined : "record")}
           >
             <Radio size={16} />
@@ -3194,6 +3514,7 @@ export function App({ host }: AppProps) {
           <IconButton
             active={openPalette === "output"}
             label="Output"
+            tooltip="Open preview, generated JSON, workflow guide, and save actions."
             onClick={() => setOpenPalette(openPalette === "output" ? undefined : "output")}
           >
             <FileJson size={16} />
@@ -3201,6 +3522,7 @@ export function App({ host }: AppProps) {
           <IconButton
             active={mode === "item"}
             label="Shape"
+            tooltip="Pick the repeated records or table rows that become output rows."
             onClick={() => {
               setMode("item");
               setActiveTab("shape");
@@ -3213,6 +3535,7 @@ export function App({ host }: AppProps) {
           <IconButton
             active={mode === "field"}
             label="Field"
+            tooltip="Add a field from inside the selected repeated record."
             onClick={() => {
               setMode("field");
               setActiveTab("fields");
@@ -3225,6 +3548,7 @@ export function App({ host }: AppProps) {
           <IconButton
             active={mode === "pagination"}
             label="Next"
+            tooltip="Choose the Next or load-more control for bounded pagination."
             onClick={() => {
               setMode("pagination");
               setActiveTab("shape");
@@ -3237,14 +3561,27 @@ export function App({ host }: AppProps) {
           <IconButton
             active={mode === "action"}
             label={actionRecording ? "Stop" : "Actions"}
+            tooltip={
+              actionRecording
+                ? "Stop recording setup actions and append them to the workflow."
+                : "Record setup actions such as search, filter, click, and scroll."
+            }
             onClick={actionRecording ? stopActionRecording : startActionRecording}
           >
             {actionRecording ? <Square size={16} /> : <Radio size={16} />}
           </IconButton>
-          <IconButton label="Preview" onClick={runPreview}>
+          <IconButton
+            label="Preview"
+            tooltip="Extract current-page rows with the draft selectors."
+            onClick={runPreview}
+          >
             <Play size={16} />
           </IconButton>
-          <IconButton label={saving ? "Saving" : "Save"} onClick={saveConfig}>
+          <IconButton
+            label={saving ? "Saving" : "Save"}
+            tooltip="Validate and save the extraction workflow config."
+            onClick={saveConfig}
+          >
             <Save size={16} />
           </IconButton>
           <button
@@ -3279,8 +3616,8 @@ export function App({ host }: AppProps) {
           >
             <div className="flex h-full min-h-0 flex-col gap-2 bg-[#eef2f7] p-2">
               <InspectorSection
-                title="Definition flow"
-                subtitle="Navigate, capture, loop, then verify for an agent handoff."
+                title="Workflow steps"
+                subtitle="1 Navigate, 2 Capture, 3 Loop, 4 Verify."
                 count="4"
               >
                 <DefinitionFlow
@@ -3372,7 +3709,7 @@ export function App({ host }: AppProps) {
                 <div className="space-y-3">
                   {activeTab === "shape" ? (
                     <>
-                      <ShapePanel draft={draft} />
+                      <ShapePanel draft={draft} onSelectorChange={updateShapeSelector} />
                       <PaginationPanel draft={draft} setDraft={setDraft} />
                     </>
                   ) : null}
@@ -3384,6 +3721,8 @@ export function App({ host }: AppProps) {
                       stats={actionStats}
                       onStart={startActionRecording}
                       onStop={stopActionRecording}
+                      onChange={updateAction}
+                      onInsertAfter={insertActionAfter}
                       onRemove={(id) =>
                         setDraft((current) => ({
                           ...current,
@@ -3420,7 +3759,16 @@ export function App({ host }: AppProps) {
                   {activeTab === "guide" ? (
                     <AgentGuidePanel guide={agentGuide} onCopy={copyAgentGuide} />
                   ) : null}
-                  {activeTab === "diagnostics" ? <DiagnosticsPanel draft={draft} /> : null}
+                  {activeTab === "diagnostics" ? (
+                    <DiagnosticsPanel
+                      draft={draft}
+                      previewRows={deferredPreviewRows}
+                      onWaivePreview={() => {
+                        setDraft((current) => ({ ...current, previewWaived: true }));
+                        setStatus("Preview requirement waived for this save");
+                      }}
+                    />
+                  ) : null}
                 </div>
               </InspectorSection>
             </div>

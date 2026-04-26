@@ -51,6 +51,18 @@ export function recordingsDirectory(): string {
   return resolveWorkspacePath("recordings");
 }
 
+export function browserFlowsDirectory(): string {
+  return resolveWorkspacePath("flows");
+}
+
+export function browserFlowRunsDirectory(): string {
+  return resolveWorkspacePath("flows", "runs");
+}
+
+export function browserFlowArtifactsDirectory(): string {
+  return resolveWorkspacePath("flows", "artifacts");
+}
+
 export function configsDirectory(): string {
   return resolveWorkspacePath("configs", "sites");
 }

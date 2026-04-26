@@ -1,0 +1,11 @@
+{
+  "name": "@web-seek/browser-flow-recorder-overlay",
+  "version": "0.0.0",
+  "private": true,
+  "main": "index.ts",
+  "types": "index.ts",
+  "dependencies": {
+    "@web-seek/browser-flow-steps": "workspace:*",
+    "@web-seek/data-engine": "workspace:*"
+  }
+}

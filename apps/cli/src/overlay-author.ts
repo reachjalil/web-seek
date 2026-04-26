@@ -38,8 +38,10 @@ type OverlayDraftAction =
   | {
       id: string;
       type: "click";
-      selector: string;
+      selector?: string;
       label?: string;
+      optional?: boolean;
+      recordedAfterCapture?: boolean;
       selectorMeta?: SelectorMeta;
       observedMutations: number;
       observedNetwork: number;
@@ -49,9 +51,11 @@ type OverlayDraftAction =
   | {
       id: string;
       type: "fill" | "select";
-      selector: string;
+      selector?: string;
       value: string;
       label?: string;
+      optional?: boolean;
+      recordedAfterCapture?: boolean;
       selectorMeta?: SelectorMeta;
       observedMutations: number;
       observedNetwork: number;
@@ -64,6 +68,33 @@ type OverlayDraftAction =
       x: number;
       y: number;
       label?: string;
+      optional?: boolean;
+      recordedAfterCapture?: boolean;
+      observedMutations: number;
+      observedNetwork: number;
+      pointerMoves: number;
+      paginationHint?: boolean;
+    }
+  | {
+      id: string;
+      type: "wait";
+      durationMs: number;
+      reason?: string;
+      label?: string;
+      optional?: boolean;
+      recordedAfterCapture?: boolean;
+      observedMutations: number;
+      observedNetwork: number;
+      pointerMoves: number;
+      paginationHint?: boolean;
+    }
+  | {
+      id: string;
+      type: "checkpoint";
+      reason: string;
+      label?: string;
+      optional?: boolean;
+      recordedAfterCapture?: boolean;
       observedMutations: number;
       observedNetwork: number;
       pointerMoves: number;
@@ -85,6 +116,7 @@ interface OverlayDraft {
   actions: OverlayDraftAction[];
   pagination?: PaginationConfig & { selectorMeta?: SelectorMeta };
   lastPreviewRowCount?: number;
+  previewWaived?: boolean;
   notes?: string;
 }
 
@@ -208,48 +240,78 @@ function normalizePagination(
 }
 
 function normalizeActionSteps(actions: OverlayDraftAction[]): ExtractionStep[] {
-  return actions.map((action, index) => {
-    const base = {
-      id: `action-${index + 1}-${action.type}`,
-      label: action.label,
-      optional: false,
-    };
+  return actions
+    .map((action, index): ExtractionStep | undefined => {
+      const base = {
+        id: `action-${index + 1}-${action.type}`,
+        label: action.label,
+        optional: action.optional ?? false,
+      };
 
-    switch (action.type) {
-      case "click":
-        return {
-          ...base,
-          type: "click",
-          selector: action.selector,
-          timeoutMs: 15_000,
-        };
-      case "fill":
-        return {
-          ...base,
-          type: "fill",
-          selector: action.selector,
-          value: action.value,
-          timeoutMs: 15_000,
-        };
-      case "select":
-        return {
-          ...base,
-          type: "select",
-          selector: action.selector,
-          value: action.value,
-          timeoutMs: 15_000,
-        };
-      case "scroll":
-        return {
-          ...base,
-          type: "scroll",
-          x: action.x,
-          y: action.y,
-          behavior: "auto",
-          waitAfterMs: 500,
-        };
-    }
-  });
+      switch (action.type) {
+        case "click":
+          if (!action.selector) {
+            return undefined;
+          }
+          return {
+            ...base,
+            type: "click",
+            selector: action.selector,
+            timeoutMs: 15_000,
+          };
+        case "fill":
+          if (!action.selector) {
+            return undefined;
+          }
+          return {
+            ...base,
+            type: "fill",
+            selector: action.selector,
+            value: action.value,
+            timeoutMs: 15_000,
+          };
+        case "select":
+          if (!action.selector) {
+            return undefined;
+          }
+          return {
+            ...base,
+            type: "select",
+            selector: action.selector,
+            value: action.value,
+            timeoutMs: 15_000,
+          };
+        case "scroll":
+          return {
+            ...base,
+            type: "scroll",
+            x: action.x,
+            y: action.y,
+            behavior: "auto",
+            waitAfterMs: 500,
+          };
+        case "wait":
+          return {
+            ...base,
+            type: "wait",
+            durationMs:
+              Number.isInteger(action.durationMs) && action.durationMs >= 0
+                ? action.durationMs
+                : 1000,
+            reason: normalizeOptionalText(action.reason ?? ""),
+          };
+        case "checkpoint":
+          return {
+            ...base,
+            type: "human-checkpoint",
+            reason:
+              normalizeOptionalText(action.reason) ??
+              normalizeOptionalText(action.label ?? "") ??
+              "Confirm the browser is ready to continue.",
+          };
+      }
+    })
+    .filter((step): step is ExtractionStep => Boolean(step));
 }
 
 function buildExtractionStep(draft: OverlayDraft): ExtractionStep {

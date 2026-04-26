@@ -335,6 +335,9 @@ async function executeStep(
     case "wait-for-selector":
       await page.waitForSelector(step.selector, { timeout: step.timeoutMs });
       break;
+    case "wait":
+      await page.waitForTimeout(step.durationMs);
+      break;
     case "click":
       await page.click(step.selector, { timeout: step.timeoutMs });
       break;
