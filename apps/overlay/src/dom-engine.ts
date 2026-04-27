@@ -794,6 +794,7 @@ export function extractPreviewRows(draft: OverlayDraft): Record<string, string>[
   }
 
   return queryAll(document, draft.itemSelector)
+    .filter((item) => Boolean(rectForElement(item)))
     .slice(0, 50)
     .map((item) => {
       const row: Record<string, string> = {};

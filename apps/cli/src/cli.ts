@@ -12,11 +12,18 @@ import {
 import Table from "cli-table3";
 import { authorBrowserFlow } from "./browser-flow-author";
 import { replayBrowserFlow } from "./browser-flow-replay";
+import { authorBrowserQaBrief } from "./browser-qa-brief-author";
 import { collectInputVariables, runExtractionConfig } from "./extractor";
 import { authorSiteConfigWithOverlay } from "./overlay-author";
 import { unwrapPrompt } from "./prompt-utils";
 
-type MenuAction = "create-extraction" | "run-extraction" | "create-flow" | "replay-flow" | "exit";
+type MenuAction =
+  | "create-qa-brief"
+  | "create-extraction"
+  | "run-extraction"
+  | "create-flow"
+  | "replay-flow"
+  | "exit";
 
 function renderBrowserFlows(flows: BrowserFlowEntry[]): void {
   const table = new Table({
@@ -164,6 +171,11 @@ async function runExtractionWorkflow(): Promise<void> {
   await runExtractionWorkflowPath(config.path);
 }
 
+async function createBrowserQaBrief(): Promise<void> {
+  const path = await authorBrowserQaBrief();
+  note(`Saved to ${path}`, "Browser QA brief saved");
+}
+
 async function createBrowserFlow(): Promise<void> {
   const path = await authorBrowserFlow();
   note(`Saved to ${path}`, "Browser flow saved");
@@ -189,14 +201,15 @@ async function replaySavedBrowserFlow(): Promise<void> {
 
 async function menuLoop(): Promise<void> {
   console.log(formatTitle("Web Seek"));
-  intro("Config-first extraction workflow authoring and QA replay");
+  intro("Browser QA automation brief authoring with legacy extraction and replay tools");
 
   while (true) {
     const action = await unwrapPrompt(
       select<MenuAction>({
         message: "What would you like to do?",
         options: [
-          { value: "create-extraction", label: "Create extraction workflow" },
+          { value: "create-qa-brief", label: "Create browser QA brief" },
+          { value: "create-extraction", label: "Create extraction workflow (legacy)" },
           { value: "run-extraction", label: "Run extraction workflow" },
           { value: "create-flow", label: "Create browser flow (QA debug)" },
           { value: "replay-flow", label: "Replay browser flow (QA debug)" },
@@ -206,7 +219,9 @@ async function menuLoop(): Promise<void> {
     );
 
     try {
-      if (action === "create-extraction") {
+      if (action === "create-qa-brief") {
+        await createBrowserQaBrief();
+      } else if (action === "create-extraction") {
         await createExtractionWorkflow();
       } else if (action === "run-extraction") {
         await runExtractionWorkflow();

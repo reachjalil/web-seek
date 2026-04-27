@@ -155,6 +155,16 @@ async function extractTableRows(
   return page.$eval(
     step.selector,
     (table, args) => {
+      const isVisible = (element: Element): boolean => {
+        const rect = element.getBoundingClientRect();
+        const style = window.getComputedStyle(element);
+        return (
+          rect.width > 0 &&
+          rect.height > 0 &&
+          style.display !== "none" &&
+          style.visibility !== "hidden"
+        );
+      };
       const readValue = (root: Element, selector: string, attribute: string): string => {
         const target = selector === ":scope" ? root : root.querySelector(selector);
         if (!target) {
@@ -173,7 +183,7 @@ async function extractTableRows(
         return target.getAttribute(attribute) ?? "";
       };
 
-      const rows = Array.from(table.querySelectorAll(args.rowSelector));
+      const rows = Array.from(table.querySelectorAll(args.rowSelector)).filter(isVisible);
       return rows.map((row) => {
         const result: Record<string, string> = {};
         for (const field of args.fields) {
@@ -200,6 +210,16 @@ async function extractListRows(
   return page.$$eval(
     step.itemSelector,
     (items, args) => {
+      const isVisible = (element: Element): boolean => {
+        const rect = element.getBoundingClientRect();
+        const style = window.getComputedStyle(element);
+        return (
+          rect.width > 0 &&
+          rect.height > 0 &&
+          style.display !== "none" &&
+          style.visibility !== "hidden"
+        );
+      };
       const readValue = (root: Element, selector: string, attribute: string): string => {
         const target = selector === ":scope" ? root : root.querySelector(selector);
         if (!target) {
@@ -218,7 +238,7 @@ async function extractListRows(
         return target.getAttribute(attribute) ?? "";
       };
 
-      return items.map((item) => {
+      return items.filter(isVisible).map((item) => {
         const result: Record<string, string> = {};
         for (const field of args.fields) {
           result[field.name] = readValue(item, field.selector, field.attribute);

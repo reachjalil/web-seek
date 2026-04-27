@@ -1,56 +1,83 @@
-# Extraction Workflow Authoring Checklist
+# Browser QA Brief Authoring Checklist
 
-Use this checklist when reviewing the flow step by step before saving a config.
+Use this checklist when reviewing a browser QA brief before saving it under `qa-briefs/`. The brief
+is guidance for a later automation agent, not a crawler, extractor, or guaranteed replay script.
 
-## 1. Navigate
+## 1. Scope
 
-- Confirm the start URL is the public/authorized page where the workflow should begin.
-- Record only setup actions needed before extraction: search input, filters, submit clicks, or scroll.
-- Remove accidental clicks from the action list.
-- Edit fill/select values if the captured value should be a template such as
-  `{{input:lastName|Last name}}`.
-- Mark fragile or site-dependent setup actions as optional only when a failed action should not stop
-  the run.
-- Insert a `wait` after actions that trigger delayed page updates.
-- Insert a checkpoint when a human must approve terms, renew a session, or resolve an allowed manual
-  state.
+- Confirm the start URL is the authorized page where QA review should begin.
+- Write a summary that names the behavior under test, not just the website.
+- Keep the brief focused on one user path or state family.
+- Prefer official public flows and exports when the goal is data collection.
+- Stop and add a checkpoint for CAPTCHA, login, terms, rate-limit, paywall, or access-control states.
+- Do not capture credentials, tokens, API keys, or secret values.
 
-## 2. Capture
+## 2. Demonstrate
 
-- Pick the repeated record, list item, card, or table row that represents one output row.
-- Verify the highlighted matches correspond to real records, not layout containers.
-- Add fields from inside the selected repeated record.
-- Rename fields to stable output names.
-- Mark fields required only when empty values should be treated as suspicious.
-- Use selector options to compare primary and alternate selectors.
-- Prefer selectors with stable attributes and sensible match counts.
+- Use `Browse` for normal site interaction.
+- Use `Record` only while demonstrating actions the later QA automation may need.
+- Keep recorded steps intentional: clicks, focus changes, fills/selects, keyboard actions, scrolls,
+  and navigation.
+- Remove or avoid accidental interactions that do not explain the QA path.
+- Treat recorded selectors and rectangles as locator hints that may need repair.
+- Use target metadata such as tag name, ARIA label, form name, role, and test id to choose better
+  Playwright locators than a generated structural selector.
+- Confirm visited URLs include the meaningful states reached during the demonstration.
 
-## 3. Loop
+## 3. Annotate
 
-- Add pagination only when data continues onto another page.
-- Confirm the selector points to a Next or load-more control.
-- Keep `maxPages` bounded. The default is `25`; lower it for smoke tests.
-- Keep `stop when disabled` enabled for normal numbered pagination.
-- Remember that overlay preview checks the current page only; the full runner handles pagination.
+- Use `Annotate` to click important elements and describe what QA should verify.
+- Use `Draw Region` for visual states such as banners, result groups, maps, charts, or empty states.
+- Write assertions as expected outcomes: visible text, enabled/disabled controls, result changes,
+  validation messages, URL/state changes, or absence of page errors.
+- Add comments only for general guidance that does not fit a specific element, region, or assertion.
+- Keep text samples concise; they help identify elements but should not become brittle assertions
+  unless exact text is the requirement.
 
-## 4. Verify
+## 4. Checkpoints And Compliance
 
-- Run preview before saving.
-- Confirm preview row count against the visible page.
-- Check required fields are populated in preview rows.
-- Review Diagnostics for:
-  - missing preview,
-  - zero preview rows,
-  - low selector confidence,
-  - required fields empty in preview,
-  - actions recorded after capture setup,
-  - pagination configured with current-page-only preview.
-- Inspect generated JSON if selectors or action order look wrong.
-- Save only when the workflow is bounded and compliant.
+- Add a `checkpoint` when a human must make an allowed decision or when automation must stop.
+- Use the `Check` control for CAPTCHA, login, terms, paywall, rate-limit, or access-control states.
+- Do not ask the later agent to bypass CAPTCHA, authentication, rate limits, browser identity checks,
+  paywalls, or terms screens.
+- Do not hide automation from a site.
+- Capture only what is needed for the QA task.
+- Preserve the guardrail policy in the saved JSON.
+
+## 5. Verify And Save
+
+- Open JSON Preview before saving.
+- Confirm the JSON schema is `web-seek.browser-qa-brief.v1`.
+- Confirm the steps include the needed demonstration actions, element annotations, region
+  annotations, assertion notes, comments, and checkpoints.
+- Confirm `visitedUrls` and `startUrl` are correct.
+- Confirm no credential-like values were saved.
+- Save only when the brief is clear enough for an automation agent to convert into durable tests.
+
+## Automation Agent Interpretation
+
+- Convert `demo-*` steps into a Playwright path only when they are still necessary and stable. Use
+  `demo-focus` mainly to understand keyboard/tab order or field activation.
+- Convert `annotate-element`, `annotate-region`, and `assertion-note` into explicit expectations.
+- Prefer role, label, name, test-id, and semantic locators over positional selectors.
+- Use saved selectors, rectangles, scroll positions, and text samples as hints, not immutable
+  commands.
+- Add human checkpoints or stop conditions for blocked states.
+
+## Legacy Extraction Checklist
+
+For `Create extraction workflow (legacy)`, still review the old extraction concerns:
+
+- Confirm the workflow is public/authorized and bounded.
+- Record only setup actions needed before extraction.
+- Pick one repeated record/table row shape and fields from inside it.
+- Keep pagination bounded with `maxPages`.
+- Run preview before saving unless explicitly waived.
+- Confirm output artifacts go to `exports/` and generated files stay out of commits.
 
 ## After Save
 
-- Run the smoke extraction when the site state is safe to repeat immediately.
-- Confirm JSON/CSV artifacts were written under `exports/`.
+- Confirm the QA brief was written under `qa-briefs/`.
+- Run a small manual smoke authoring pass against a local fixture when changing overlay behavior.
 - Do not commit generated `exports/`, `recordings/`, screenshots, or downloads.
-- Commit only the reusable config and code/docs changes needed for the workflow.
+- Commit only intentional QA briefs, reusable configs, and code/docs changes needed for the work.

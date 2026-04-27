@@ -1830,6 +1830,50 @@ function Metric({
   );
 }
 
+function HelpNote({
+  title,
+  children,
+}: {
+  title: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="rounded-[4px] border border-sky-200 bg-sky-50 px-3 py-2 text-xs leading-5 text-slate-700">
+      <div className="font-bold text-slate-900">{title}</div>
+      <div>{children}</div>
+    </div>
+  );
+}
+
+function DataLocationPanel({
+  draft,
+  recording,
+}: {
+  draft: OverlayDraft;
+  recording?: RecordingState;
+}) {
+  return (
+    <div className="grid gap-2 text-xs leading-5 text-slate-700">
+      <HelpNote title="Draft">
+        Current selections live only in this browser overlay until you press Save. Preview rows are
+        temporary and are not written to disk.
+      </HelpNote>
+      <HelpNote title="Saved workflow">
+        Save writes a validated config to <code>configs/sites/{draft.id || "workflow"}.json</code>.
+        That config is the reusable artifact to review, commit, and run later.
+      </HelpNote>
+      <HelpNote title="Run output">
+        Running the workflow writes JSON/CSV results to <code>exports/</code> by default. Downloads
+        and screenshots, when configured, are also stored under <code>exports/</code>.
+      </HelpNote>
+      <HelpNote title="Authoring recording">
+        The authoring session is tracked separately for review under <code>recordings/</code>
+        {recording ? ` as ${recording.id}` : " after save"}. Do not commit generated recordings.
+      </HelpNote>
+    </div>
+  );
+}
+
 function SelectorRepairList({
   selector,
   alternates,
@@ -1886,6 +1930,11 @@ function ShapePanel({
 }) {
   return (
     <section className="space-y-3">
+      <HelpNote title="What shape means">
+        Pick the element that represents one output row, such as one result card, one list item, or
+        one table row. The extractor repeats your field selectors inside every matching visible
+        record.
+      </HelpNote>
       <div>
         <div className="mb-2 flex items-center justify-between text-xs font-semibold uppercase tracking-wide text-slate-500">
           <span>Repeated item</span>
@@ -2065,6 +2114,11 @@ function FieldsPanel({
 
   return (
     <section>
+      <HelpNote title="What fields become">
+        Each field becomes a column in JSON/CSV output. Selectors are relative to the repeated
+        record; use <code>text</code> for visible text, <code>href</code> for links, and{" "}
+        <code>value</code> for form values.
+      </HelpNote>
       <div className="mb-2 flex items-center justify-between text-xs font-semibold uppercase tracking-wide text-slate-500">
         <span>Fields</span>
         <span>{draft.fields.length}</span>
@@ -2126,6 +2180,10 @@ function ActionsPanel({
 
   return (
     <section className="space-y-3">
+      <HelpNote title="What actions do">
+        Actions run after navigation and before extraction. Use them for search/filter setup. Mark
+        an action optional only if the workflow should continue when that action is missing.
+      </HelpNote>
       <div className="flex items-center justify-between">
         <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">
           Action flow
@@ -2356,42 +2414,54 @@ function PreviewTable({ rows }: { rows: Record<string, string>[] }) {
   const columns = useMemo(() => Object.keys(rows[0] ?? {}).slice(0, 8), [rows]);
   if (rows.length === 0 || columns.length === 0) {
     return (
-      <div className="rounded-md border border-slate-200 bg-white p-3 text-sm text-slate-500">
-        No preview rows.
-      </div>
+      <section className="space-y-2">
+        <HelpNote title="What preview checks">
+          Preview reads the current visible page only. It does not click pagination and does not
+          save output files.
+        </HelpNote>
+        <div className="rounded-md border border-slate-200 bg-white p-3 text-sm text-slate-500">
+          No preview rows.
+        </div>
+      </section>
     );
   }
 
   return (
-    <div className="overflow-hidden rounded-md border border-slate-200 bg-white">
-      <div className="max-h-80 overflow-auto">
-        <table className="w-full border-collapse text-left text-xs">
-          <thead className="sticky top-0 bg-slate-100 text-slate-700">
-            <tr>
-              {columns.map((column) => (
-                <th key={column} className="border-b border-slate-200 px-2 py-1.5 font-semibold">
-                  {column}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {rows.slice(0, 20).map((row) => (
-              <tr key={rowKey(row)} className="odd:bg-white even:bg-slate-50">
+    <section className="space-y-2">
+      <HelpNote title="What preview checks">
+        Preview reads visible rows on the current page with the draft selectors. Full extraction
+        later writes files and handles bounded pagination.
+      </HelpNote>
+      <div className="overflow-hidden rounded-md border border-slate-200 bg-white">
+        <div className="max-h-80 overflow-auto">
+          <table className="w-full border-collapse text-left text-xs">
+            <thead className="sticky top-0 bg-slate-100 text-slate-700">
+              <tr>
                 {columns.map((column) => (
-                  <td
-                    key={column}
-                    className="max-w-48 truncate border-b border-slate-100 px-2 py-1.5"
-                  >
-                    {row[column]}
-                  </td>
+                  <th key={column} className="border-b border-slate-200 px-2 py-1.5 font-semibold">
+                    {column}
+                  </th>
                 ))}
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {rows.slice(0, 20).map((row) => (
+                <tr key={rowKey(row)} className="odd:bg-white even:bg-slate-50">
+                  {columns.map((column) => (
+                    <td
+                      key={column}
+                      className="max-w-48 truncate border-b border-slate-100 px-2 py-1.5"
+                    >
+                      {row[column]}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </div>
-    </div>
+    </section>
   );
 }
 
@@ -2404,6 +2474,11 @@ function PaginationPanel({
 }) {
   return (
     <section>
+      <HelpNote title="What loop means">
+        Pagination runs only after extracting the current page. <code>Max pages</code> bounds the
+        run, <code>Wait ms</code> gives the page time to update, and stop-when-disabled prevents
+        clicking a disabled Next control.
+      </HelpNote>
       <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
         Pagination
       </div>
@@ -2527,6 +2602,10 @@ function JsonPanel({
 
   return (
     <section className="space-y-3">
+      <HelpNote title="Generated vs draft JSON">
+        Generated JSON is the validated site config preview that will be saved. Draft JSON is the
+        editable overlay state; apply draft edits only when you need advanced selector repair.
+      </HelpNote>
       <div className="flex items-center justify-between">
         <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">
           Generated JSON
@@ -2651,6 +2730,10 @@ function AgentGuidePanel({
 }) {
   return (
     <section className="space-y-3">
+      <HelpNote title="What this guide is for">
+        The guide is a human-readable handoff for another operator or agent. It explains the start
+        URL, setup actions, capture selectors, pagination, and verification checks.
+      </HelpNote>
       <div className="rounded-[4px] border border-slate-950/10 bg-white p-3">
         <div className="flex items-start gap-2">
           <Route size={16} className="mt-0.5 shrink-0 text-teal-700" />
@@ -2693,6 +2776,10 @@ function DiagnosticsPanel({
   const issues = draftIssues(draft, { previewRows });
   return (
     <section className="space-y-2">
+      <HelpNote title="How to read diagnostics">
+        Errors block save because the workflow cannot run reliably. Warnings do not block save, but
+        they point to selector, preview, pagination, or action-order risks to review first.
+      </HelpNote>
       <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Validation</div>
       {issues.length === 0 ? (
         <div className="flex items-center gap-2 rounded-md border border-teal-200 bg-teal-50 p-3 text-sm font-semibold text-teal-800">
@@ -3651,6 +3738,15 @@ export function App({ host }: AppProps) {
                     }
                   }}
                 />
+              </InspectorSection>
+
+              <InspectorSection
+                title="Where data goes"
+                subtitle="Draft, saved config, exports, and recordings."
+                count="paths"
+                defaultOpen={false}
+              >
+                <DataLocationPanel draft={draft} recording={recording} />
               </InspectorSection>
 
               <InspectorSection

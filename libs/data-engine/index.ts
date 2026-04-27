@@ -1,5 +1,6 @@
 export * from "./src/config-store";
 export * from "./src/csv";
+export * from "./src/browser-qa-brief-store";
 export * from "./src/browser-flow-store";
 export * from "./src/extraction-store";
 export * from "./src/json";

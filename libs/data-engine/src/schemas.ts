@@ -145,6 +145,196 @@ export const browserFlowTargetRectSchema = z.object({
 
 export type BrowserFlowTargetRect = z.infer<typeof browserFlowTargetRectSchema>;
 
+export const browserQaBriefRectSchema = z.object({
+  x: z.number().nonnegative(),
+  y: z.number().nonnegative(),
+  width: z.number().positive(),
+  height: z.number().positive(),
+});
+
+export type BrowserQaBriefRect = z.infer<typeof browserQaBriefRectSchema>;
+
+export const browserQaBriefViewportSchema = z.object({
+  width: z.number().int().positive(),
+  height: z.number().int().positive(),
+});
+
+export type BrowserQaBriefViewport = z.infer<typeof browserQaBriefViewportSchema>;
+
+export const browserQaBriefScrollPositionSchema = z.object({
+  x: z.number().nonnegative().default(0),
+  y: z.number().nonnegative().default(0),
+});
+
+export type BrowserQaBriefScrollPosition = z.infer<typeof browserQaBriefScrollPositionSchema>;
+
+export const browserQaBriefBrowserMetadataSchema = z.object({
+  name: z.string().default("chromium"),
+  channel: z.string().optional(),
+  userAgent: z.string().optional(),
+  version: z.string().optional(),
+  headed: z.literal(true).default(true),
+});
+
+export type BrowserQaBriefBrowserMetadata = z.infer<typeof browserQaBriefBrowserMetadataSchema>;
+
+export const browserQaBriefGuardrailPolicySchema = z.object({
+  headedReview: z.literal(true).default(true),
+  noCaptchaBypass: z.literal(true).default(true),
+  noAccessControlBypass: z.literal(true).default(true),
+  noCredentialCapture: z.literal(true).default(true),
+});
+
+export type BrowserQaBriefGuardrailPolicy = z.infer<typeof browserQaBriefGuardrailPolicySchema>;
+
+export const browserQaBriefElementTargetSchema = z.object({
+  selector: z.string().min(1),
+  rect: browserQaBriefRectSchema.optional(),
+  textSample: z.string().optional(),
+  tagName: z.string().optional(),
+  role: z.string().optional(),
+  ariaLabel: z.string().optional(),
+  name: z.string().optional(),
+  testId: z.string().optional(),
+});
+
+export type BrowserQaBriefElementTarget = z.infer<typeof browserQaBriefElementTargetSchema>;
+
+export const browserQaBriefStepBaseSchema = z.object({
+  id: z.string().min(1),
+  timestamp: z.string(),
+  url: z.string().min(1),
+  scroll: browserQaBriefScrollPositionSchema.default({ x: 0, y: 0 }),
+  pageTitle: z.string().optional(),
+  viewport: browserQaBriefViewportSchema.optional(),
+});
+
+export const browserQaBriefNavigateStepSchema = browserQaBriefStepBaseSchema.extend({
+  type: z.literal("navigate"),
+  url: z.string().url(),
+  reachedFrom: z.string().min(1).optional(),
+});
+
+export const browserQaBriefDemoClickStepSchema = browserQaBriefStepBaseSchema.extend({
+  type: z.literal("demo-click"),
+  target: browserQaBriefElementTargetSchema,
+});
+
+export const browserQaBriefDemoInputStepSchema = browserQaBriefStepBaseSchema.extend({
+  type: z.literal("demo-input"),
+  target: browserQaBriefElementTargetSchema,
+  action: z.enum(["fill", "select"]),
+  value: z.string(),
+  inputType: z.string().optional(),
+});
+
+export const browserQaBriefDemoFocusStepSchema = browserQaBriefStepBaseSchema.extend({
+  type: z.literal("demo-focus"),
+  target: browserQaBriefElementTargetSchema,
+  focusSource: z.enum(["keyboard", "pointer", "programmatic", "unknown"]).default("unknown"),
+});
+
+export const browserQaBriefKeyboardEventSchema = z.object({
+  key: z.string().min(1),
+  code: z.string().optional(),
+  text: z.string().optional(),
+  modifiers: z.array(z.enum(["Alt", "Control", "Meta", "Shift"])).default([]),
+});
+
+export type BrowserQaBriefKeyboardEvent = z.infer<typeof browserQaBriefKeyboardEventSchema>;
+
+export const browserQaBriefDemoKeyboardStepSchema = browserQaBriefStepBaseSchema.extend({
+  type: z.literal("demo-keyboard"),
+  event: browserQaBriefKeyboardEventSchema,
+  focusedSelector: z.string().min(1).optional(),
+  targetRect: browserQaBriefRectSchema.optional(),
+});
+
+export const browserQaBriefDemoScrollStepSchema = browserQaBriefStepBaseSchema.extend({
+  type: z.literal("demo-scroll"),
+  from: browserQaBriefScrollPositionSchema,
+  to: browserQaBriefScrollPositionSchema,
+  deltaX: z.number(),
+  deltaY: z.number(),
+});
+
+export const browserQaBriefAnnotateElementStepSchema = browserQaBriefStepBaseSchema.extend({
+  type: z.literal("annotate-element"),
+  target: browserQaBriefElementTargetSchema,
+  instruction: z.string().trim().min(1),
+});
+
+export const browserQaBriefAnnotateRegionStepSchema = browserQaBriefStepBaseSchema.extend({
+  type: z.literal("annotate-region"),
+  rect: browserQaBriefRectSchema,
+  instruction: z.string().trim().min(1),
+});
+
+export const browserQaBriefAssertionNoteStepSchema = browserQaBriefStepBaseSchema.extend({
+  type: z.literal("assertion-note"),
+  assertion: z.string().trim().min(1),
+});
+
+export const browserQaBriefCheckpointStepSchema = browserQaBriefStepBaseSchema.extend({
+  type: z.literal("checkpoint"),
+  reason: z.string().trim().min(1),
+});
+
+export const browserQaBriefCommentStepSchema = browserQaBriefStepBaseSchema.extend({
+  type: z.literal("comment"),
+  comment: z.string().trim().min(1),
+});
+
+export const browserQaBriefStepSchema = z.discriminatedUnion("type", [
+  browserQaBriefNavigateStepSchema,
+  browserQaBriefDemoClickStepSchema,
+  browserQaBriefDemoInputStepSchema,
+  browserQaBriefDemoFocusStepSchema,
+  browserQaBriefDemoKeyboardStepSchema,
+  browserQaBriefDemoScrollStepSchema,
+  browserQaBriefAnnotateElementStepSchema,
+  browserQaBriefAnnotateRegionStepSchema,
+  browserQaBriefAssertionNoteStepSchema,
+  browserQaBriefCheckpointStepSchema,
+  browserQaBriefCommentStepSchema,
+]);
+
+export type BrowserQaBriefStep = z.infer<typeof browserQaBriefStepSchema>;
+
+export const browserQaBriefAuditSchema = z
+  .object({
+    createdBy: z.string().optional(),
+    createdWith: z.literal("web-seek-cli").default("web-seek-cli"),
+    lastSavedAt: z.string().optional(),
+  })
+  .default({ createdWith: "web-seek-cli" });
+
+export type BrowserQaBriefAudit = z.infer<typeof browserQaBriefAuditSchema>;
+
+export const browserQaBriefSchema = z.object({
+  schema: z.literal("web-seek.browser-qa-brief.v1"),
+  id: z.string().min(1),
+  name: z.string().min(1),
+  summary: z.string().trim().min(1),
+  startUrl: z.string().url(),
+  visitedUrls: z.array(z.string().min(1)).default([]),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+  viewport: browserQaBriefViewportSchema,
+  browser: browserQaBriefBrowserMetadataSchema.default({ name: "chromium", headed: true }),
+  guardrails: browserQaBriefGuardrailPolicySchema.default({
+    headedReview: true,
+    noCaptchaBypass: true,
+    noAccessControlBypass: true,
+    noCredentialCapture: true,
+  }),
+  steps: z.array(browserQaBriefStepSchema).default([]),
+  notes: z.string().optional(),
+  audit: browserQaBriefAuditSchema,
+});
+
+export type BrowserQaBrief = z.infer<typeof browserQaBriefSchema>;
+
 const browserFlowStepBaseSchema = z.object({
   id: z.string().min(1),
   label: z.string().optional(),

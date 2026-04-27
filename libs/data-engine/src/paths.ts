@@ -55,6 +55,10 @@ export function browserFlowsDirectory(): string {
   return resolveWorkspacePath("flows");
 }
 
+export function qaBriefsDirectory(): string {
+  return resolveWorkspacePath("qa-briefs");
+}
+
 export function browserFlowRunsDirectory(): string {
   return resolveWorkspacePath("flows", "runs");
 }
